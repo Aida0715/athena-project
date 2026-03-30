@@ -1,0 +1,73 @@
+<comment>
+problem   = Jeans test (modified for isothermal sphere + lane-emden table)
+reference = 
+configure = --prob=jeans --grav=mg/fft (-fft)
+
+<job>
+problem_id = Jeans    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 0.01       # time increment between outputs
+
+<output2>
+file_type  = vtk        # Binary data dump
+variable   = cons       # variables to be output
+dt         = 0.01       # time increment between outputs
+ghost_zones= false
+
+<time>
+cfl_number = 0.05        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = 50000      # cycle limit for short tests
+tlim       = 1.0        # time limit
+integrator  = vl2       # time integration algorithm
+xorder      = 2         # order of spatial reconstruction
+ncycle_out  = 1         # interval for stdout summary info
+
+<mesh>
+nx1        = 192         # Number of zones in X1-direction
+x1min      = 0.0        # minimum value of X1
+x1max      = 12.0        # maximum value of X1
+ix1_bc     = periodic   # inner-X1 boundary flag
+ox1_bc     = periodic   # outer-X1 boundary flag
+
+nx2        = 192         # Number of zones in X2-direction
+x2min      = 0.0        # minimum value of X2
+x2max      = 12.0        # maximum value of X2
+ix2_bc     = periodic   # inner-X2 boundary flag
+ox2_bc     = periodic   # outer-X2 boundary flag
+
+nx3        = 192         # Number of zones in X3-direction
+x3min      = 0.0        # minimum value of X3
+x3max      = 12.0        # maximum value of X3
+ix3_bc     = periodic   # inner-X3 boundary flag
+ox3_bc     = periodic   # outer-X3 boundary flag
+
+<meshblock>
+nx1        = 32
+nx2        = 32
+nx3        = 32
+
+<hydro>
+gamma           = 1.2            # gamma = C_p/C_v
+iso_sound_speed = 1.00           # equivalent to sqrt(gamma*p/d) for p=0.1, d=1　変更したら必ずpythonスクリプトの該当箇所も変更すること
+
+<gravity>
+mgmode          = FMG
+threshold       = 0.0
+ix1_bc          = periodic
+ox1_bc          = periodic
+ix2_bc          = periodic
+ox2_bc          = periodic
+ix3_bc          = periodic
+ox3_bc          = periodic
+
+<problem>
+use_lane_table = true
+lane_table_file = /home/aian/Documents/athenapp/lane_emden/lane_polytrope_n5.dat
+Rsphere         = 5.0
+rho_c           = 1.0   #変更したら必ずpythonスクリプトの該当箇所も変更すること
+rho_bg          = 1e-8
+grav_const      = 1.0   #変更したら必ずpythonスクリプトの該当箇所も変更すること
+beta_rot = 0.25         #T/|W|
+rot_axis = 3            # z軸回転（1=x, 2=y, 3=z）

@@ -1,0 +1,261 @@
+//========================================================================================
+// Athena++ astrophysical MHD code
+// Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
+// Licensed under the 3-clause BSD License, see LICENSE file for details
+//========================================================================================
+//! \file jeans.cpp
+//! \brief Linear wave problem generator for 1D/2D/3D problems including self-gravity
+//!
+//! In 1D, the problem is setup along one of the three coordinate axes (specified by
+//! setting [ang_2,ang_3] = 0.0 or PI/2 in the input file).  In 2D/3D this routine
+//! automatically sets the wavevector along the domain diagonal.
+//========================================================================================
+
+// C headers
+
+// C++ headers
+#include <algorithm>  // min, max
+#include <cmath>
+#include <cstdio>     // fopen(), fprintf(), freopen()
+#include <iostream>   // endl
+#include <sstream>    // stringstream
+#include <stdexcept>  // runtime_error
+#include <string>     // c_str()
+#include <fstream>    // 追加
+#include <vector>     // 追加
+#include <utility>    // 追加
+
+// Athena++ headers
+#include "../athena.hpp"
+#include "../athena_arrays.hpp"
+#include "../coordinates/coordinates.hpp"
+#include "../eos/eos.hpp"
+#include "../field/field.hpp"
+#include "../globals.hpp"
+#include "../gravity/gravity.hpp"
+#include "../hydro/hydro.hpp"
+#include "../mesh/mesh.hpp"
+#include "../parameter_input.hpp"
+
+#ifdef MPI_PARALLEL
+#include <mpi.h>
+#endif
+
+#ifdef OPENMP_PARALLEL
+#include <omp.h>
+#endif
+
+#if MAGNETIC_FIELDS_ENABLED
+#error "This problem generator does not support magnetic fields"
+#endif
+
+namespace {
+// with functions A1,2,3 which compute vector potentials
+Real ang_2, ang_3; // Rotation angles about the y and z' axis
+Real sin_a2, cos_a2, sin_a3, cos_a3;
+Real cs2, gam, gm1, gconst;
+Real vphi0;
+Real d0, p0, v0, u0, w0, va, b0;
+Real alpha;
+
+//追加 Hayashi IC table
+bool use_ic_table = false;
+std::string ic_table_file;
+
+std::vector<Real> tab_rho;
+std::vector<Real> tab_R;
+std::vector<Real> tab_z;
+
+// 追加
+static Real InterpLaneRho(const std::vector<Real> &rvec, const std::vector<Real> &rhovec, Real r) {
+  if (rvec.empty()) return 0.0;
+  if (r <= rvec.front()) return rhovec.front();
+  if (r >= rvec.back()) return rhovec.back();
+  size_t lo = 0, hi = rvec.size()-1;
+  while (hi - lo > 1) {
+    size_t mid = (lo + hi) >> 1;
+    if (rvec[mid] <= r) lo = mid; else hi = mid;
+  }
+  Real x0 = rvec[lo], x1 = rvec[hi];
+  Real y0 = rhovec[lo], y1 = rhovec[hi];
+  if (x1 == x0) return y0;
+  Real t = (r - x0) / (x1 - x0);
+  return y0 + t*(y1 - y0);
+}
+
+static Real FindNearestRho_RZ(
+    const std::vector<Real>& Rv,
+    const std::vector<Real>& Zv,
+    const std::vector<Real>& rhov,
+    Real R, Real z) {
+
+  Real dmin = 1.0e300;
+  size_t idx = 0;
+
+  for (size_t n = 0; n < rhov.size(); ++n) {
+    Real dR = R - Rv[n];
+    Real dz = z - Zv[n];
+    Real d2 = dR*dR + dz*dz;
+    if (d2 < dmin) {
+      dmin = d2;
+      idx = n;
+    }
+  }
+  return rhov[idx];
+}
+
+Real grav_const = 1.0; 
+} // namespace
+
+void Mesh::InitUserMeshData(ParameterInput *pin) {
+  Real x1size = mesh_size.x1max - mesh_size.x1min;
+  Real x2size = mesh_size.x2max - mesh_size.x2min;
+  Real x3size = mesh_size.x3max - mesh_size.x3min;
+  Real x0 = mesh_size.x1min;
+  Real x1 = mesh_size.x1max;
+  Real y0 = mesh_size.x2min;
+  Real y1 = mesh_size.x2max;
+
+  alpha = pin->GetReal("problem", "alpha");
+
+  Real Rmax = std::sqrt(
+    std::max(x0*x0, x1*x1) +
+    std::max(y0*y0, y1*y1)
+  );
+
+
+  d0 = 1.0, p0 = 1.0;
+  u0 = 0.0, v0 = 0.0, w0 = 0.0;
+  va = 0.0, b0 = 0.0;
+
+  if (NON_BAROTROPIC_EOS) {
+    gam = pin->GetReal("hydro","gamma");
+    p0 = 1.0/gam;
+    gm1 = gam-1.0;
+    cs2 = gam*p0/d0;
+    vphi0 = pin->GetOrAddReal("problem","vphi0",0.0);
+  } else {
+    Real iso_cs = pin->GetReal("hydro","iso_sound_speed");
+    cs2 = SQR(iso_cs);
+  }
+
+  // 追加 林解テーブルの読み込み
+  use_ic_table = pin->GetOrAddBoolean("problem","use_ic_table",false);
+  ic_table_file = pin->GetOrAddString("problem","ic_table_file","");
+  grav_const = pin->GetOrAddReal("problem","grav_const",1.0);
+
+  //重力定数（入力ファイルから読み込む）
+    gconst = grav_const;
+  if (SELF_GRAVITY_ENABLED) {
+    SetGravitationalConstant(gconst);
+  }
+
+  if (use_ic_table) {
+    if (Globals::my_rank == 0)
+      std::cout << "Reading IC table: " << ic_table_file << std::endl;
+
+    std::ifstream ifs(ic_table_file.c_str());
+    if (!ifs.is_open()) {
+      std::stringstream msg;
+      msg << "IC table file not found: " << ic_table_file;
+      ATHENA_ERROR(msg);
+    }
+
+    Real R,z,rho;
+    while (ifs >> R >> z >> rho) {
+      tab_R.push_back(R);
+      tab_rho.push_back(rho);
+      tab_z.push_back(z);
+    }
+    ifs.close();
+
+    std::vector<size_t> idx(tab_R.size());
+    for (size_t i = 0; i < idx.size(); ++i) idx[i] = i;
+
+    std::sort(idx.begin(), idx.end(),
+              [&](size_t a, size_t b){ return tab_R[a] < tab_R[b]; });
+
+    std::vector<Real> R_sorted,z_sorted, rho_sorted;
+    for (size_t i : idx) {
+      R_sorted.push_back(tab_R[i]);
+      z_sorted.push_back(tab_z[i]);
+      rho_sorted.push_back(tab_rho[i]);
+    }
+
+    tab_R.swap(R_sorted);
+    tab_z.swap(z_sorted);
+    tab_rho.swap(rho_sorted);
+
+    if (tab_rho.size() == 0) {
+      std::stringstream msg;
+      msg << "IC table loaded but contains zero entries";
+      ATHENA_ERROR(msg);
+    }
+
+    if (Globals::my_rank == 0) {
+      std::cout << "IC table size = " << tab_rho.size() << std::endl;
+    }
+  }
+
+  // 何も挿入しない
+  return;
+}
+
+//========================================================================================
+//! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
+//  \brief
+//========================================================================================
+
+void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  // Determine mesh center (default sphere center)
+  Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
+  Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
+
+
+  if (!use_ic_table) {
+    std::stringstream msg;
+    msg << "use_ic_table = false but ProblemGenerator expects IC table";
+    ATHENA_ERROR(msg);
+  }
+
+  
+  // --- 各セルに IC を代入 ---
+  for (int k = ks; k <= ke; ++k) {
+    for (int j = js; j <= je; ++j) {
+      for (int i = is; i <= ie; ++i) {
+
+        // セル中心座標（IC table と同じ原点系）
+        Real x = pcoord->x1v(i) - x0;
+        Real y = pcoord->x2v(j) - y0;
+        Real z = pcoord->x3v(k);
+        Real R = std::sqrt(x*x + y*y);
+        Real rho = FindNearestRho_RZ(tab_R, tab_z, tab_rho, R, z);
+
+        // 密度
+        phydro->u(IDN, k, j, i) = rho;
+
+        //vphiをαをもとに計算
+        Real vphi = std::sqrt(2.0 * cs2 * (alpha - 1.0));
+
+        //初速度
+        Real vx = 0.0;
+	Real vy = 0.0;
+	Real vz = 0.0;
+
+	if (R > 0.0) {
+  	  vx = -vphi * y / R;
+          vy =  vphi * x / R;
+	}
+
+
+        // 運動量
+        phydro->u(IM1, k, j, i) = rho * vx;
+        phydro->u(IM2, k, j, i) = rho * vy;
+        phydro->u(IM3, k, j, i) = 0.0; 
+      }
+    }
+  }
+}
+
+
+

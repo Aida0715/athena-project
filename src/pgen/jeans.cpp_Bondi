@@ -1,0 +1,500 @@
+//========================================================================================
+// Athena++ astrophysical MHD code
+// Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
+// Licensed under the 3-clause BSD License, see LICENSE file for details
+//========================================================================================
+//! \file jeans.cpp
+//! \brief Linear wave problem generator for 1D/2D/3D problems including self-gravity
+//!
+//! In 1D, the problem is setup along one of the three coordinate axes (specified by
+//! setting [ang_2,ang_3] = 0.0 or PI/2 in the input file).  In 2D/3D this routine
+//! automatically sets the wavevector along the domain diagonal.
+//========================================================================================
+
+// C headers
+
+// C++ headers
+#include <algorithm>  // min, max
+#include <cmath>
+#include <cstdio>     // fopen(), fprintf(), freopen()
+#include <iostream>   // endl
+#include <sstream>    // stringstream
+#include <stdexcept>  // runtime_error
+#include <string>     // c_str()
+#include <fstream>    // 追加
+#include <vector>     // 追加
+#include <utility>    // 追加
+
+// Athena++ headers
+#include "../athena.hpp"
+#include "../athena_arrays.hpp"
+#include "../coordinates/coordinates.hpp"
+#include "../eos/eos.hpp"
+#include "../field/field.hpp"
+#include "../globals.hpp"
+#include "../gravity/gravity.hpp"
+#include "../hydro/hydro.hpp"
+#include "../mesh/mesh.hpp"
+#include "../parameter_input.hpp"
+
+#ifdef MPI_PARALLEL
+#include <mpi.h>
+#endif
+
+#ifdef OPENMP_PARALLEL
+#include <omp.h>
+#endif
+
+#if MAGNETIC_FIELDS_ENABLED
+#error "This problem generator does not support magnetic fields"
+#endif
+
+void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
+                    const AthenaArray<Real> &prim,
+                    const AthenaArray<Real> &prim_scalar,
+                    const AthenaArray<Real> &bcc,
+                    AthenaArray<Real> &cons,
+                    AthenaArray<Real> &cons_scalar);
+
+namespace {
+// with functions A1,2,3 which compute vector potentials
+Real cs2, gam, gm1, gconst;
+
+//===== Toyouchi+23 parameters =====
+Real epsilon_soft = 0.01;   // gravitational softening
+const Real Mstar = 1.0;    // central star mass (code unit)
+
+// physical constants
+const Real kb = 1.380649e-16;
+const Real mh = 1.6735575e-24;
+const Real mu = 1.22;
+
+// ===== unit system (code unit <-> cgs) =====
+const Real Munit = 4.0e33;   // g (central star mass)
+const Real Lunit = 6.7e15;   // cm (bondi radius)
+const Real Tunit = 3.34e10;  // s (free fall time)
+
+const Real Vunit = Lunit/Tunit;                 // velocity unit
+const Real Rhounit = Munit/(Lunit*Lunit*Lunit); // density unit
+const Real Punit = Rhounit*Vunit*Vunit;         // pressure unit
+
+// unit conversion
+const Real AU = 1.496e13;
+
+// 境界条件プロトタイプ宣言
+void BondiBoundaryInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+void BondiBoundaryOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+void BondiBoundaryInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+void BondiBoundaryOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+void BondiBoundaryInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+void BondiBoundaryOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                          FaceField &b, Real time, Real dt,
+                          int is, int ie, int js, int je, int ks, int ke, int ngh);
+
+// ==================== 流入禁止流出境界条件関数 ====================
+
+void BondiBoundaryInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  static bool debug_done = false;
+  
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryInnerX1 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+  
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        int ii = is - i;
+        int i0 = is;
+        
+        // デバッグ：最初の1回だけインデックスを表示
+        if (!debug_done && pmb->pmy_mesh->ncycle == 0 && k==ks && j==js) {
+          std::cout << "  Setting ghost[" << i << "]: ii=" << ii 
+                    << ", i0=" << i0 << std::endl;
+        }
+        
+        // 密度・圧力はゼロ勾配（外挿）
+        prim(IDN, k, j, ii) = prim(IDN, k, j, i0);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, k, j, ii) = prim(IPR, k, j, i0);
+        }
+        
+        // 速度：外向き（正）はそのまま、内向き（負）は反射
+        Real vx_out = prim(IVX, k, j, i0);
+        if (vx_out >= 0.0) {
+          // 外向き：そのまま外挿
+          prim(IVX, k, j, ii) = vx_out;
+        } else {
+          // 内向き：反射（符号反転）
+          prim(IVX, k, j, ii) = -vx_out;
+        }
+        prim(IVY, k, j, ii) = prim(IVY, k, j, i0);
+        prim(IVZ, k, j, ii) = prim(IVZ, k, j, i0);
+      }
+    }
+  }
+  
+  // デバッグ：設定後の値を表示
+  if (!debug_done && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "After setting ghost cells:" << std::endl;
+    for (int i=1; i<=ngh; ++i) {
+      int ii = is - i;
+      std::cout << "  ghost cell (ii=" << ii << "): rho=" << prim(IDN, ks, js, ii) 
+                << ", vx=" << prim(IVX, ks, js, ii) << std::endl;
+    }
+    debug_done = true;
+  }
+}
+
+void BondiBoundaryOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  static bool debug_done = false;
+  
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryOuterX1 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+  
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        int ii = ie + i;
+        int i0 = ie;
+        
+        // デバッグ：最初の1回だけインデックスを表示
+        if (!debug_done && pmb->pmy_mesh->ncycle == 0 && k==ks && j==js) {
+          std::cout << "  Setting ghost[" << i << "]: ii=" << ii 
+                    << ", i0=" << i0 << std::endl;
+        }
+        
+        prim(IDN, k, j, ii) = prim(IDN, k, j, i0);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, k, j, ii) = prim(IPR, k, j, i0);
+        }
+        
+        Real vx_out = prim(IVX, k, j, i0);
+        if (vx_out <= 0.0) {
+          prim(IVX, k, j, ii) = vx_out;
+        } else {
+          prim(IVX, k, j, ii) = -vx_out;
+        }
+        prim(IVY, k, j, ii) = prim(IVY, k, j, i0);
+        prim(IVZ, k, j, ii) = prim(IVZ, k, j, i0);
+      }
+    }
+  }
+  
+  // デバッグ：設定後の値を表示
+  if (!debug_done && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "After setting ghost cells:" << std::endl;
+    for (int i=1; i<=ngh; ++i) {
+      int ii = ie + i;
+      std::cout << "  ghost cell (ii=" << ii << "): rho=" << prim(IDN, ks, js, ii) 
+                << ", vx=" << prim(IVX, ks, js, ii) << std::endl;
+    }
+    debug_done = true;
+  }
+}
+
+void BondiBoundaryInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryInnerX2 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+  
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=1; j<=ngh; ++j) {
+      int jj = js - j;
+      int j0 = js;
+      for (int i=is; i<=ie; ++i) {
+        prim(IDN, k, jj, i) = prim(IDN, k, j0, i);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, k, jj, i) = prim(IPR, k, j0, i);
+        }
+        
+        Real vy_out = prim(IVY, k, j0, i);
+        if (vy_out >= 0.0) {
+          prim(IVY, k, jj, i) = vy_out;
+        } else {
+          prim(IVY, k, jj, i) = -vy_out;
+        }
+        prim(IVX, k, jj, i) = prim(IVX, k, j0, i);
+        prim(IVZ, k, jj, i) = prim(IVZ, k, j0, i);
+      }
+    }
+  }
+}
+
+void BondiBoundaryOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryOuterX2 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+  
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=1; j<=ngh; ++j) {
+      int jj = je + j;
+      int j0 = je;
+      for (int i=is; i<=ie; ++i) {
+        prim(IDN, k, jj, i) = prim(IDN, k, j0, i);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, k, jj, i) = prim(IPR, k, j0, i);
+        }
+        
+        Real vy_out = prim(IVY, k, j0, i);
+        if (vy_out <= 0.0) {
+          prim(IVY, k, jj, i) = vy_out;
+        } else {
+          prim(IVY, k, jj, i) = -vy_out;
+        }
+        prim(IVX, k, jj, i) = prim(IVX, k, j0, i);
+        prim(IVZ, k, jj, i) = prim(IVZ, k, j0, i);
+      }
+    }
+  }
+}
+
+void BondiBoundaryInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryInnerX3 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+
+  for (int k=1; k<=ngh; ++k) {
+    int kk = ks - k;
+    int k0 = ks;
+    for (int j=js; j<=je; ++j) {
+      for (int i=is; i<=ie; ++i) {
+        prim(IDN, kk, j, i) = prim(IDN, k0, j, i);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, kk, j, i) = prim(IPR, k0, j, i);
+        }
+        
+        Real vz_out = prim(IVZ, k0, j, i);
+        if (vz_out >= 0.0) {
+          prim(IVZ, kk, j, i) = vz_out;
+        } else {
+          prim(IVZ, kk, j, i) = -vz_out;
+        }
+        prim(IVX, kk, j, i) = prim(IVX, k0, j, i);
+        prim(IVY, kk, j, i) = prim(IVY, k0, j, i);
+      }
+    }
+  }
+}
+
+void BondiBoundaryOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim, 
+                          FaceField &b, Real time, Real dt, 
+                          int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  static bool first_call = true;
+  if (first_call && pmb->pmy_mesh->ncycle == 0) {
+    std::cout << "=== BondiBoundaryOuterX3 (Reflective outflow) CALLED ===" << std::endl;
+    std::cout << "time = " << time << ", ngh = " << ngh << std::endl;
+    first_call = false;
+  }
+  
+  for (int k=1; k<=ngh; ++k) {
+    int kk = ke + k;
+    int k0 = ke;
+    for (int j=js; j<=je; ++j) {
+      for (int i=is; i<=ie; ++i) {
+        prim(IDN, kk, j, i) = prim(IDN, k0, j, i);
+        if (NON_BAROTROPIC_EOS) {
+          prim(IPR, kk, j, i) = prim(IPR, k0, j, i);
+        }
+        
+        Real vz_out = prim(IVZ, k0, j, i);
+        if (vz_out <= 0.0) {
+          prim(IVZ, kk, j, i) = vz_out;
+        } else {
+          prim(IVZ, kk, j, i) = -vz_out;
+        }
+        prim(IVX, kk, j, i) = prim(IVX, k0, j, i);
+        prim(IVY, kk, j, i) = prim(IVY, k0, j, i);
+      }
+    }
+  }
+}
+
+} // namespace
+
+
+void Mesh::InitUserMeshData(ParameterInput *pin) {
+  Real x1size = mesh_size.x1max - mesh_size.x1min;
+  Real x2size = mesh_size.x2max - mesh_size.x2min;
+  Real x3size = mesh_size.x3max - mesh_size.x3min;
+
+  epsilon_soft = pin->GetOrAddReal("problem","epsilon",0.01);
+  gconst = pin->GetOrAddReal("problem","grav_const",1.0);
+
+  EnrollUserExplicitSourceFunction(CentralGravity);
+
+  // 境界条件の登録
+  EnrollUserBoundaryFunction(BoundaryFace::inner_x1, BondiBoundaryInnerX1);
+  EnrollUserBoundaryFunction(BoundaryFace::outer_x1, BondiBoundaryOuterX1);
+  EnrollUserBoundaryFunction(BoundaryFace::inner_x2, BondiBoundaryInnerX2);
+  EnrollUserBoundaryFunction(BoundaryFace::outer_x2, BondiBoundaryOuterX2);
+  EnrollUserBoundaryFunction(BoundaryFace::inner_x3, BondiBoundaryInnerX3);
+  EnrollUserBoundaryFunction(BoundaryFace::outer_x3, BondiBoundaryOuterX3);
+
+  Real iso_cs = pin->GetReal("hydro","iso_sound_speed");
+  cs2 = SQR(iso_cs);
+
+  if (NON_BAROTROPIC_EOS) {
+    gam = pin->GetReal("hydro","gamma");
+    gm1 = gam-1.0;
+  }
+
+  //重力定数（入力ファイルから読み込む）
+  if (SELF_GRAVITY_ENABLED) {
+    SetGravitationalConstant(gconst);
+  }
+  return;
+}
+
+//========================================================================================
+//! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
+//  \brief
+//========================================================================================
+
+void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  // Determine mesh center (default sphere center)
+  Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
+  Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
+  Real z0 = 0.5*(pmy_mesh->mesh_size.x3min + pmy_mesh->mesh_size.x3max);
+
+  // isothermal sound speed
+  Real cs = pin->GetReal("hydro","iso_sound_speed");
+
+  Real GM = gconst * Mstar;
+
+  // sonic radius
+  Real rs = GM / (2.0 * cs * cs);   // =0.5
+
+  // --- Bernoulli定数（固定値）---
+  Real C = -1.5 + 2.0*log(2.0);  //遷音速点での情報より求めたベルヌーイの式の定数(風方程式の積分定数)
+
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=is; i<=ie; ++i) {	Real x = pcoord->x1v(i) - x0;
+	Real y = pcoord->x2v(j) - y0;
+	Real z = pcoord->x3v(k) - z0;
+	Real r = std::sqrt(x*x + y*y +z*z);
+
+	Real r_safe = std::max(r, 1e-2);
+
+	// --- Newton-Raphson ---
+	Real v = -std::sqrt(2.0 * (C + 2.0*log(r_safe) + 1.0/r_safe));
+	v = std::max(v, -2.0);  // 下限を設定
+	v = std::min(v, -0.01); // 上限を設定（負の値）
+
+	for (int iter = 0; iter < 50; ++iter) {
+  	  Real f = 0.5*v*v - log(-v) - 2.0*log(r_safe) - 1.0/r_safe - C;
+  	  Real df = v - 1.0/v;
+
+ 	  if (std::abs(df) < 1e-12) break;
+
+ 	  Real dv = -f/df;
+
+ 	  // 発散防止の緩和
+  	  if (std::abs(dv) > 0.5) dv = (dv > 0 ? 0.5 : -0.5);
+
+ 	   v += dv;
+ 	   v = std::max(v, -2.0);
+ 	   v = std::min(v, -0.01);
+
+ 	   if (std::abs(f) < 1e-10) break;
+	}
+
+	// 密度を連続の式から
+	Real mdot = M_PI * exp(1.5);   // 理論値（ρ∞=1）
+	Real rho = mdot / (4.0 * M_PI * r_safe*r_safe * std::abs(v));
+
+	// 球対称 → Cartesianへ
+	Real vx = v * x / r_safe;
+	Real vy = v * y / r_safe;
+	Real vz = v * z / r_safe;
+
+	phydro->u(IDN,k,j,i) = rho;
+
+        //追加 set momentum
+	phydro->u(IM1,k,j,i) = rho * vx;
+	phydro->u(IM2,k,j,i) = rho * vy;
+	phydro->u(IM3,k,j,i) = rho * vz;
+
+        // set internal energy consistently (use P_final and kinetic energy)
+        if (NON_BAROTROPIC_EOS) {
+	  Real P = rho * cs * cs;
+	  Real ke = 0.5 * rho *
+         	    (vx*vx + vy*vy + vz*vz);
+ 	  phydro->u(IEN,k,j,i) = P/gm1 + ke;
+	}
+      }
+    }
+  }
+}
+
+void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
+                    const AthenaArray<Real> &prim,
+                    const AthenaArray<Real> &prim_scalar,
+                    const AthenaArray<Real> &bcc,
+                    AthenaArray<Real> &cons,
+                    AthenaArray<Real> &cons_scalar) {
+
+  Coordinates *pcoord = pmb->pcoord;
+
+  for (int k=pmb->ks; k<=pmb->ke; ++k) {
+    for (int j=pmb->js; j<=pmb->je; ++j) {
+      for (int i=pmb->is; i<=pmb->ie; ++i) {
+
+        Real x = pcoord->x1v(i);
+        Real y = pcoord->x2v(j);
+        Real z = pcoord->x3v(k);
+
+        Real r2 = x*x + y*y + z*z + epsilon_soft*epsilon_soft;
+        Real r  = std::sqrt(r2);
+
+        Real fac = -gconst * Mstar / (r2 * r);
+
+        Real gx = fac * x;
+        Real gy = fac * y;
+        Real gz = fac * z;
+
+        cons(IM1,k,j,i) += dt * prim(IDN,k,j,i) * gx;
+        cons(IM2,k,j,i) += dt * prim(IDN,k,j,i) * gy;
+        cons(IM3,k,j,i) += dt * prim(IDN,k,j,i) * gz;
+      }
+    }
+  }
+  //  pmy_mesh->tlim=pin->SetReal("time","tlim",TWO_PI/omega*2.0);
+  return;
+}

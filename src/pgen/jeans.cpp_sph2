@@ -1,0 +1,332 @@
+//========================================================================================
+// Athena++ astrophysical MHD code
+// Copyright(C) 2014 James M. Stone <jmstone@princeton.edu> and other code contributors
+// Licensed under the 3-clause BSD License, see LICENSE file for details
+//========================================================================================
+//! \file jeans.cpp
+//! \brief Linear wave problem generator for 1D/2D/3D problems including self-gravity
+//!
+//! In 1D, the problem is setup along one of the three coordinate axes (specified by
+//! setting [ang_2,ang_3] = 0.0 or PI/2 in the input file).  In 2D/3D this routine
+//! automatically sets the wavevector along the domain diagonal.
+//========================================================================================
+
+// C headers
+
+// C++ headers
+#include <algorithm>  // min, max
+#include <cmath>
+#include <cstdio>     // fopen(), fprintf(), freopen()
+#include <iostream>   // endl
+#include <sstream>    // stringstream
+#include <stdexcept>  // runtime_error
+#include <string>     // c_str()
+#include <fstream>    // 追加
+#include <vector>     // 追加
+#include <utility>    // 追加
+
+// Athena++ headers
+#include "../athena.hpp"
+#include "../athena_arrays.hpp"
+#include "../coordinates/coordinates.hpp"
+#include "../eos/eos.hpp"
+#include "../field/field.hpp"
+#include "../globals.hpp"
+#include "../gravity/gravity.hpp"
+#include "../hydro/hydro.hpp"
+#include "../mesh/mesh.hpp"
+#include "../parameter_input.hpp"
+
+#ifdef MPI_PARALLEL
+#include <mpi.h>
+#endif
+
+#ifdef OPENMP_PARALLEL
+#include <omp.h>
+#endif
+
+#if MAGNETIC_FIELDS_ENABLED
+#error "This problem generator does not support magnetic fields"
+#endif
+
+namespace {
+// with functions A1,2,3 which compute vector potentials
+Real ang_2, ang_3; // Rotation angles about the y and z' axis
+Real sin_a2, cos_a2, sin_a3, cos_a3;
+Real cs2, gam, gm1, gconst;
+Real d0, p0, v0, u0, w0, va, b0;
+//追加
+bool use_lane_table = false;
+std::string lane_table_file = "";
+std::vector<Real> lane_r;
+std::vector<Real> lane_rho;
+std::vector<Real> lane_P;
+Real Rsphere = 0.25;
+Real rho_c = 1.0;
+Real rho_bg = 1e-3;
+Real grav_const = 1.0;
+
+//追加 rotation parameters
+Real beta_rot = 0.0;     // T/|W|
+int  rot_axis = 3;       // 1=x軸対称回転, 2=y軸対称回転, 3=z軸対称回転
+Real Omega0   = 0.0;     // computed angular velocity
+Real Wgrav    = 0.0;     // gravitational energy
+Real Irot     = 0.0;     // moment of inertia 
+} // namespace
+
+// 追加
+static Real InterpLaneRho(const std::vector<Real> &rvec, const std::vector<Real> &rhovec, Real r) {
+  if (rvec.empty()) return 0.0;
+  if (r <= rvec.front()) return rhovec.front();
+  if (r >= rvec.back()) return rhovec.back();
+  size_t lo = 0, hi = rvec.size()-1;
+  while (hi - lo > 1) {
+    size_t mid = (lo + hi) >> 1;
+    if (rvec[mid] <= r) lo = mid; else hi = mid;
+  }
+  Real x0 = rvec[lo], x1 = rvec[hi];
+  Real y0 = rhovec[lo], y1 = rhovec[hi];
+  if (x1 == x0) return y0;
+  Real t = (r - x0) / (x1 - x0);
+  return y0 + t*(y1 - y0);
+}
+
+void Mesh::InitUserMeshData(ParameterInput *pin) {
+  Real x1size = mesh_size.x1max - mesh_size.x1min;
+  Real x2size = mesh_size.x2max - mesh_size.x2min;
+  Real x3size = mesh_size.x3max - mesh_size.x3min;
+
+  d0 = 1.0, p0 = 1.0;
+  u0 = 0.0, v0 = 0.0, w0 = 0.0;
+  va = 0.0, b0 = 0.0;
+
+  if (NON_BAROTROPIC_EOS) {
+    gam = pin->GetReal("hydro","gamma");
+    p0 = 1.0/gam;
+    gm1 = gam-1.0;
+    cs2 = gam*p0/d0;
+  } else {
+    Real iso_cs = pin->GetReal("hydro","iso_sound_speed");
+    cs2 = SQR(iso_cs);
+  }
+
+  //追加 回転パラメータ読み込み
+  beta_rot = pin->GetOrAddReal("problem","beta_rot",0.0);
+  rot_axis = pin->GetOrAddInteger("problem","rot_axis",3);
+
+  // 追加 レーンエムデンテーブルの読み込み
+  use_lane_table = pin->GetOrAddBoolean("problem","use_lane_table",false);
+  lane_table_file = pin->GetOrAddString("problem","lane_table_file","");
+  Rsphere = pin->GetOrAddReal("problem","Rsphere",0.25);
+  rho_c = pin->GetOrAddReal("problem","rho_c",1.0);
+  rho_bg = pin->GetOrAddReal("problem","rho_bg",1e-3);
+  grav_const = pin->GetOrAddReal("problem","grav_const",1.0);
+
+  //重力定数（入力ファイルから読み込む）
+    gconst = grav_const;
+  if (SELF_GRAVITY_ENABLED) {
+    SetGravitationalConstant(gconst);
+  }
+
+  if (use_lane_table) {
+    // Require user to provide lane_table_file when use_lane_table=true
+    lane_table_file = pin->GetString("problem", "lane_table_file");
+
+    if (Globals::my_rank == 0) std::cout << "Reading Lane-Emden table from " << lane_table_file << std::endl;
+
+    std::ifstream ifs(lane_table_file.c_str());
+    if (!ifs.is_open()) {
+      std::stringstream msg;
+      msg << "### FATAL ERROR in Mesh::InitUserMeshData\n"
+          << "Lane-Emden table file could not be opened: " << lane_table_file << "\n"
+          << "Please check 'lane_table_file' in the input file and ensure the file exists and is readable.\n";
+      ATHENA_ERROR(msg);
+    }
+
+    // parse file: expect 3 columns: r  rho  P  (r in code length units)
+    lane_r.clear();
+    lane_rho.clear();
+    lane_P.clear();
+
+    std::string line;
+    Real rtmp=0.0, rhotmp=0.0, Ptmp=0.0;
+    size_t nlines = 0;
+    while (std::getline(ifs, line)) {
+      // strip leading/trailing whitespace quickly
+      if (line.empty()) continue;
+      if (line[0] == '#') continue; // comment
+      std::stringstream ss(line);
+      // require at least r and rho
+      if (!(ss >> rtmp >> rhotmp)) continue;
+      // read optional P; if absent, set Ptmp = cs2 * rhotmp as fallback
+      if (ss >> Ptmp) {
+        // use provided Ptmp
+      } else {
+        Ptmp = cs2 * rhotmp;
+      }
+      lane_r.push_back(rtmp);
+      lane_rho.push_back(rhotmp);
+      lane_P.push_back(Ptmp);
+      ++nlines;
+    }
+    ifs.close();
+
+    if (nlines < 2) {
+      std::stringstream msg;
+      msg << "### FATAL ERROR in Mesh::InitUserMeshData\n"
+          << "Lane-Emden table has insufficient data (" << nlines << " lines): " << lane_table_file << "\n"
+          << "Provide a table with at least two rows: r rho [P].\n";
+      ATHENA_ERROR(msg);
+    }
+
+    //追加 WとIをレーンエムデンテーブルから計算
+    if (use_lane_table && beta_rot > 0.0) {
+
+      Wgrav = 0.0;
+      Irot  = 0.0;
+
+      Real Menc = 0.0;
+
+      for (size_t i = 1; i < lane_r.size(); ++i) {
+        Real r0 = lane_r[i-1];
+        Real r1 = lane_r[i];
+        if (r1 > Rsphere) break;
+
+        Real rho0 = lane_rho[i-1];
+        Real rho1 = lane_rho[i];
+        Real rmid = 0.5*(r0 + r1);
+        Real rho  = 0.5*(rho0 + rho1);
+
+        Real dV = 4.0 * PI * rmid*rmid * (r1 - r0);
+        Real dM = rho * dV;
+
+        if (rmid > 0.0)
+          Wgrav += -grav_const * Menc * dM / rmid;
+
+        Irot += (2.0/3.0) * dM * rmid*rmid;
+
+        Menc += dM;
+      }
+
+      Omega0 = std::sqrt(2.0 * beta_rot * std::abs(Wgrav) / Irot);
+
+      if (Irot <= 0.0) {
+        std::stringstream msg;
+        msg << "### FATAL ERROR\n"
+            << "Moment of inertia Irot <= 0\n";
+        ATHENA_ERROR(msg);
+      }
+
+
+      if (Globals::my_rank == 0) {
+        std::cout << "Rotation enabled:\n";
+        std::cout << "  beta = " << beta_rot << "\n";
+        std::cout << "  W    = " << Wgrav << "\n";
+        std::cout << "  I    = " << Irot  << "\n";
+        std::cout << "  Omega= " << Omega0 << std::endl;
+      }
+    }
+
+    // optional: verify monotonic increasing r
+    for (size_t ii=1; ii<lane_r.size(); ++ii) {
+      if (lane_r[ii] <= lane_r[ii-1]) {
+        std::stringstream msg;
+        msg << "### FATAL ERROR in Mesh::InitUserMeshData\n"
+            << "Lane-Emden table r-values are not strictly increasing at line " << ii+1 << ": " << lane_table_file << "\n";
+        ATHENA_ERROR(msg);
+      }
+    }
+
+    if (Globals::my_rank == 0) {
+      std::cout << "Loaded " << lane_r.size() << " entries from lane table.\n";
+    }
+  } // end if (use_lane_table)
+  return;
+}
+
+//========================================================================================
+//! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
+//  \brief
+//========================================================================================
+
+void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  // Determine mesh center (default sphere center)
+  Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
+  Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
+  Real z0 = 0.5*(pmy_mesh->mesh_size.x3min + pmy_mesh->mesh_size.x3max);
+
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=is; i<=ie; ++i) {
+	Real x = pcoord->x1v(i) - x0;
+	Real y = pcoord->x2v(j) - y0;
+	Real z = pcoord->x3v(k) - z0;
+	Real r = std::sqrt(x*x + y*y +z*z);
+
+        // base density profile and pressure: inside Rsphere use lane table if available, else uniform core rho_c
+        Real rho_profile, P_profile;
+        if (r < Rsphere) {
+          if (use_lane_table) {
+            rho_profile = InterpLaneRho(lane_r, lane_rho, r);
+            P_profile   = InterpLaneRho(lane_r, lane_P,   r); // reuse same interp for P
+          } else {
+            rho_profile = rho_c;
+            // fallback pressure: try to be consistent with isothermal cs2 if no table
+            P_profile = cs2 * rho_profile;
+          }
+        } else {
+          rho_profile = rho_bg;
+          // set outer pressure to match background (or use last table P if desired)
+          if (!lane_P.empty()) {
+            P_profile = cs2 * rho_bg;
+          } else {
+            P_profile = cs2 * rho_bg;
+          }
+        }
+
+        Real rho_final = rho_profile;
+	Real P_final   = P_profile;
+
+        phydro->u(IDN,k,j,i) = rho_final;
+
+        //追加 rotation velocity
+        Real vx = 0.0, vy = 0.0, vz = 0.0;
+
+        if (r < Rsphere && beta_rot > 0.0) {
+          if (rot_axis == 3) {
+            vx = -Omega0 * y;
+            vy =  Omega0 * x;
+          } else if (rot_axis == 2) {
+            vx =  Omega0 * z;
+            vz = -Omega0 * x;
+          } else if (rot_axis == 1) {
+            vy = -Omega0 * z;
+            vz =  Omega0 * y;
+          }
+        }
+
+        //追加 set momentum
+	phydro->u(IM1,k,j,i) = rho_final * vx;
+	phydro->u(IM2,k,j,i) = rho_final * vy;
+	phydro->u(IM3,k,j,i) = rho_final * vz;
+
+        // set internal energy consistently (use P_final and kinetic energy)
+        if (NON_BAROTROPIC_EOS) {
+	  Real ke = 0.5 * rho_final *
+         	    (vx*vx + vy*vy + vz*vz);
+ 	  phydro->u(IEN,k,j,i) = P_final/gm1 + ke;
+	} else {
+   	  // barotropic EOS
+  	  phydro->u(IEN,k,j,i) = P_final/gm1;
+        } 
+      }
+    }
+  }
+  //  pmy_mesh->tlim=pin->SetReal("time","tlim",TWO_PI/omega*2.0);
+  return;
+}
+
+
+
+
+
