@@ -56,7 +56,7 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons,
                     AthenaArray<Real> &cons_scalar);
 
-int RefinementCondition(MeshBlock *pmb); //AMRのリファインメント宣言
+int RefinementCondition(MeshBlock *pmb); // AMRのリファインメント宣言
 
 namespace {
 // with functions A1,2,3 which compute vector potentials
