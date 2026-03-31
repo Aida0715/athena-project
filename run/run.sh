@@ -10,4 +10,4 @@ mkdir -p $OUTDIR
 cd $OUTDIR
 
 # 実行（ファイル名はinputに任せる）
-../../bin/athena -i ../../inputs/athinput.Toyouchi
+../../bin/athena -i ../../inputs/hydro/athinput.Toyouchi
