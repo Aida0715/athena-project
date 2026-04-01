@@ -69,9 +69,8 @@ Real jeans_cells = 8.0;         // Jeans長を何セルで解像するか
 Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時）
 
 //追加 rotation parameters
-Real beta_rot = 0.0;     // T/|W|
-int  rot_axis = 3;       // 1=x軸対称回転, 2=y軸対称回転, 3=z軸対称回転
-Real Omega0   = 0.0;     // computed angular velocity
+Real vphi0 = 0.0;   // cylindrical rotational velocity
+Real vr0   = 0.0;   // radial velocity
 
 //===== Toyouchi+23 parameters =====
 Real epsilon_soft = 0.5;   // gravitational softening
@@ -110,8 +109,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
   //追加 回転パラメータ読み込み
-  beta_rot = pin->GetOrAddReal("problem","beta_rot",0.0);
-  rot_axis = pin->GetOrAddInteger("problem","rot_axis",3);
+  vphi0 = pin->GetOrAddReal("problem","vphi0", 0.0);
+  vr0   = pin->GetOrAddReal("problem","vr0", 0.0);
 
   //重力定数（入力ファイルから読み込む）
   if (SELF_GRAVITY_ENABLED) {
@@ -192,30 +191,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // isothermal sound speed
   Real cs = pin->GetReal("hydro","iso_sound_speed");
 
-    // 回転がある場合のOmega0を計算
-  if (beta_rot > 0.0) {
-    // 簡単な見積もり：中心からの距離に応じた角速度
-    // より正確には、重力と遠心力のバランスから計算する必要がある
-    Real R_typical = std::max({std::abs(x0), std::abs(y0), std::abs(z0)});
-    if (R_typical > 0.0) {
-      // v_rot = sqrt(GM/r) * sqrt(beta_rot) の近似
-      Real v_rot = std::sqrt(gconst * Mstar / R_typical) * std::sqrt(beta_rot);
-      Omega0 = v_rot / R_typical;
-    } else {
-      Omega0 = 0.0;
-    }
-    
-    std::cout << "Rotation enabled: beta_rot = " << beta_rot 
-              << ", Omega0 = " << Omega0 << std::endl;
-  }
-
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
       for (int i=is; i<=ie; ++i) {
 	Real x = pcoord->x1v(i) - x0;
 	Real y = pcoord->x2v(j) - y0;
 	Real z = pcoord->x3v(k) - z0;
-	Real r = std::sqrt(x*x + y*y +z*z);
+	Real r_sph = std::sqrt(x*x + y*y +z*z);
 
         Real dx = std::min({
   	  pcoord->dx1v(i),
@@ -223,9 +205,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   	  pcoord->dx3v(k)
 	});
 
-	Real r_safe = std::max(r, 0.5*dx);
+	Real r_sph_safe = std::max(r_sph, 0.5*dx);
 
-        Real rphys = r_safe * Lunit;
+        Real rphys = r_sph_safe * Lunit;
 
 	// Toyouchi+23 density
         Real rho_phys = 1.1e-19 * pow(rphys/(1.0e5*AU), -1.75);
@@ -242,18 +224,20 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         //追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
 
-        if (beta_rot > 0.0) {
-          if (rot_axis == 3) {
-            vx = -Omega0 * y;
-            vy =  Omega0 * x;
-          } else if (rot_axis == 2) {
-            vx =  Omega0 * z;
-            vz = -Omega0 * x;
-          } else if (rot_axis == 1) {
-            vy = -Omega0 * z;
-            vz =  Omega0 * y;
-          }
-        }
+        Real r_cyl = std::sqrt(x*x + y*y);
+	Real r_cyl_safe = std::max(r_cyl, 1e-12);
+
+	// --- cylindrical rotation (Toyouchi+23) ---
+	if (vphi0 != 0.0) {
+  	  vx += -vphi0 * y / r_cyl_safe;
+  	  vy +=  vphi0 * x / r_cyl_safe;
+	}
+
+	// --- radial inflow (あとでONにする) ---
+	if (vr0 != 0.0) {
+  	  vx += vr0 * x / r_cyl_safe;
+  	  vy += vr0 * y / r_cyl_safe;
+	}
 
         //追加 set momentum
 	phydro->u(IM1,k,j,i) = rho_final * vx;
