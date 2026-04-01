@@ -10,4 +10,5 @@ mkdir -p $OUTDIR
 cd $OUTDIR
 
 # 実行（ファイル名はinputに任せる）
-../../bin/athena -i ../../inputs/hydro/athinput.Toyouchi
+# 環境作成中のテスト計算用入力ファイルはToyouchi_testディレクトリに格納
+../../bin/athena -i ../../inputs/hydro/Toyouchi_test/athinput.Toyouchi
