@@ -88,6 +88,9 @@ const Real Punit = Rhounit*Vunit*Vunit;         // pressure unit
 // unit conversion
 const Real AU = 1.496e13;
 
+// 中心カットオフ用
+Real racc = 0.0;   // accretion radius (cutoff scale)
+
 } // namespace
 
 
@@ -111,6 +114,9 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //追加 回転パラメータ読み込み
   vphi0 = pin->GetOrAddReal("problem","vphi0", 0.0);
   vr0   = pin->GetOrAddReal("problem","vr0", 0.0);
+
+  // raccを入力ファイルから
+  racc = pin->GetOrAddReal("problem", "racc", 0.44);
 
   //重力定数（入力ファイルから読み込む）
   if (SELF_GRAVITY_ENABLED) {
@@ -173,6 +179,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     
     // リファイン条件関数の登録
     EnrollUserRefinementCondition(RefinementCondition);
+
   }
   return;
 }
@@ -225,18 +232,39 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         Real vx = 0.0, vy = 0.0, vz = 0.0;
 
         Real r_cyl = std::sqrt(x*x + y*y);
-	Real r_cyl_safe = std::max(r_cyl, 1e-12);
 
-	// --- cylindrical rotation (Toyouchi+23) ---
+	// --- cutoff radius ---
+	Real r_cut = std::max(racc, 1e-12);
+
+	// --- smooth cylindrical rotation ---
 	if (vphi0 != 0.0) {
-  	  vx += -vphi0 * y / r_cyl_safe;
-  	  vy +=  vphi0 * x / r_cyl_safe;
-	}
 
-	// --- radial inflow (あとでONにする) ---
+  	  Real vphi_eff = vphi0;
+
+  	  // 中心で滑らかにゼロへ（剛体回転化させて安定化を図った）
+  	  if (r_cyl < r_cut) {
+    	    vphi_eff *= r_cyl / r_cut;
+  	  }
+
+  	  Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+
+  	  vx += -vphi_eff * y * inv_r;
+  	  vy +=  vphi_eff * x * inv_r;
+	  }
+
+	// --- radial inflow ---
 	if (vr0 != 0.0) {
-  	  vx += vr0 * x / r_cyl_safe;
-  	  vy += vr0 * y / r_cyl_safe;
+
+ 	 Real vr_eff = vr0;
+
+  	if (r_cyl < r_cut) {
+    	  vr_eff *= r_cyl / r_cut;
+  	}
+
+  	Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+
+  	vx += vr_eff * x * inv_r;
+  	vy += vr_eff * y * inv_r;
 	}
 
         //追加 set momentum
