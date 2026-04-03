@@ -226,11 +226,6 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         Real rho_final = rho_profile;
 	Real P_final   = P_profile;
 
-	// 密度フロア（最小密度を設定）
-        Real rho_min = 1e-6 * rho_profile;  // 初期密度の100万分の1
-        rho_final = std::max(rho_profile, rho_min);
-        P_final = rho_final * cs * cs;  // 圧力も再計算
-
         phydro->u(IDN,k,j,i) = rho_final;
 
         // 追加 rotation velocity
