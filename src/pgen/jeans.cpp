@@ -226,46 +226,58 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         Real rho_final = rho_profile;
 	Real P_final   = P_profile;
 
+	// 密度フロア（最小密度を設定）
+        Real rho_min = 1e-6 * rho_profile;  // 初期密度の100万分の1
+        rho_final = std::max(rho_profile, rho_min);
+        P_final = rho_final * cs * cs;  // 圧力も再計算
+
         phydro->u(IDN,k,j,i) = rho_final;
 
-        //追加 rotation velocity
+        // 追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
 
         Real r_cyl = std::sqrt(x*x + y*y);
 
-	// --- cutoff radius ---
-	Real r_cut = std::max(racc, 1e-12);
+        // --- cutoff radius ---
+        Real r_cut = std::max(racc, 1e-12); // 入力ファイルでracc=0.44としているが念の為下限値を設定
 
-	// --- smooth cylindrical rotation ---
-	if (vphi0 != 0.0) {
+        // --- 回転速度（解析的M_encを使用）---
+        if (vphi0 != 0.0) {
+            Real vphi_eff = vphi0;
 
-  	  Real vphi_eff = vphi0;
+            // 中心で滑らかにゼロへ（二次減衰で安定化）
+            if (r_cyl < r_cut) {
+                vphi_eff *= (r_cyl / r_cut) * (r_cyl / r_cut);
+            }
 
-  	  // 中心で滑らかにゼロへ（剛体回転化させて安定化を図った）
-  	  if (r_cyl < r_cut) {
-    	    vphi_eff *= r_cyl / r_cut;
-  	  }
+            // ケプラー上限の計算（M_enc = 星質量 + ガス質量）
+            // ρ = 0.11 * r^{-1.75} の解析的積分
+            // M_gas(r) = 4π * 0.11 * r^{1.25} / 1.25
+            Real M_gas = 4.0 * M_PI * 0.11 * pow(r_cyl, 1.25) / 1.25;
+            Real M_enc = Mstar + M_gas;
+            
+            Real v_max_rot = std::sqrt(gconst * M_enc / std::max(r_cyl, r_cut));
+            if (vphi_eff > v_max_rot && v_max_rot > 0) {
+                vphi_eff = 0.9 * v_max_rot;
+            }
 
-  	  Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+            Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+            vx += -vphi_eff * y * inv_r;
+            vy +=  vphi_eff * x * inv_r;
+        }
 
-  	  vx += -vphi_eff * y * inv_r;
-  	  vy +=  vphi_eff * x * inv_r;
-	  }
+        // --- radial inflow ---
+        if (vr0 != 0.0) {
+            Real vr_eff = vr0;
 
-	// --- radial inflow ---
-	if (vr0 != 0.0) {
+            if (r_cyl < r_cut) {
+                vr_eff *= r_cyl / r_cut;
+            }
 
- 	 Real vr_eff = vr0;
-
-  	if (r_cyl < r_cut) {
-    	  vr_eff *= r_cyl / r_cut;
-  	}
-
-  	Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
-
-  	vx += vr_eff * x * inv_r;
-  	vy += vr_eff * y * inv_r;
-	}
+            Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+            vx += vr_eff * x * inv_r;
+            vy += vr_eff * y * inv_r;
+        }
 
         //追加 set momentum
 	phydro->u(IM1,k,j,i) = rho_final * vx;
