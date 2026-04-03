@@ -65,7 +65,7 @@ commit ID: 9571459
   #Compilation command:        g++ -O3 -std=c++11
 
 ## 5. 対応run
-Toyouchi-test8.sh
+Toyouchi-test9.sh
 
 ## 6.ログ記録
 cycle=0 time=0.0000000000000000e+00 dt=1.0220249351489546e-01
