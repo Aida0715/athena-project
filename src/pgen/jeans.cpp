@@ -335,9 +335,9 @@ int RefinementCondition(MeshBlock *pmb) {
   Real gradmax = 0.0;
   Real njmin   = 1e30;
 
-  for (int k = pmb->ks; k <= pmb->ke; ++k) {
-    for (int j = pmb->js; j <= pmb->je; ++j) {
-      for (int i = pmb->is; i <= pmb->ie; ++i) {
+  for (int k = pmb->ks+1; k <= pmb->ke-1; ++k) {
+    for (int j = pmb->js+1; j <= pmb->je-1; ++j) {
+      for (int i = pmb->is+1; i <= pmb->ie-1; ++i) {
 
         Real rho = pmb->phydro->w(IDN, k, j, i);
         Real rho_safe = std::max(rho, 1e-20);
