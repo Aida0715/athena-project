@@ -1,0 +1,84 @@
+<comment>
+problem   = Jeans test (modified for isothermal sphere + lane-emden table)
+reference = 
+configure = --prob=jeans --grav=mg/fft (-fft)
+
+<job>
+problem_id = Toyouchi    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 0.05       # time increment between outputs
+
+<output2>
+file_type  = vtk        # Binary data dump
+variable   = prim       # variables to be output
+dt         = 0.2        # time increment between outputs
+ghost_zones= false
+
+<time>
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = 50000      # cycle limit for short tests
+tlim       = 20        # time limit
+integrator  = vl2       # time integration algorithm
+xorder      = 3         # order of spatial reconstruction
+ncycle_out  = 1         # interval for stdout summary info
+
+<mesh>
+nx1        = 256         # Number of zones in X1-direction
+x1min      = -224        # minimum value of X1 ~10^5au~10^5au
+x1max      = 224        # maximum value of X1 ~10^5au
+ix1_bc     = outflow   # inner-X1 boundary flag
+ox1_bc     = outflow   # outer-X1 boundary flag
+
+nx2        = 256         # Number of zones in X2-direction
+x2min      = -224        # minimum value of X2 ~10^5au
+x2max      = 224        # maximum value of X2 ~10^5au
+ix2_bc     = outflow   # inner-X2 boundary flag
+ox2_bc     = outflow   # outer-X2 boundary flag
+
+nx3        = 256         # Number of zones in X3-direction
+x3min      = -224        # minimum value of X3 ~10^5au
+x3max      = 224        # maximum value of X3 ~10^5au
+ix3_bc     = outflow   # inner-X3 boundary flag
+ox3_bc     = outflow   # outer-X3 boundary flag
+
+refinement = adaptive
+numlevel = 2
+derefine_count = 10
+
+
+<meshblock>
+nx1        = 32
+nx2        = 32
+nx3        = 32
+
+<hydro>
+gamma           = 1.001            # gamma = C_p/C_v ~等温
+iso_sound_speed = 1.00           # equivalent to sqrt(kb*T/μ*mH) for T=530K,μ=1.22,mH=1.6735575e-24 cgs→ コード単位に変換済み
+
+<gravity>
+mgmode          = FMG
+threshold       = 0.0
+mporder         = 2
+ix1_bc          = multipole
+ox1_bc          = multipole
+ix2_bc          = multipole
+ox2_bc          = multipole
+ix3_bc          = multipole
+ox3_bc          = multipole
+
+<problem>
+epsilon = 0.22  #gravitational softning
+grav_const = 1.0
+vphi0 = 9.47
+vr0   = 0.0   # ← 最初は0
+racc  = 0.44
+# AMRリファイン設定
+use_jeans_refine = true    # Jeans長ベースのリファイン
+jeans_cells      = 8.0     # Jeans長を8セルで解像
+
+# 密度勾配リファイン（オプション）
+# 使用する場合は以下を有効にし、refine_thrを適切に設定(推奨)
+use_grad_refine  = false
+refine_thr       = 0.3
