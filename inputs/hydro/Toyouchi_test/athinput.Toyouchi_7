@@ -71,7 +71,7 @@ ox3_bc          = multipole
 <problem>
 epsilon = 0.22  #gravitational softning
 grav_const = 1.0
-vr0   = 0.0   # ← 最初は0
+vr0   = 0.0   # ←  最初は0
 racc  = 0.44
 # AMRリファイン設定
 #use_jeans_refine = true    # Jeans長ベースのリファイン
