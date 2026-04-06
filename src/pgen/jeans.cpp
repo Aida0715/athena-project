@@ -69,7 +69,6 @@ Real jeans_cells = 8.0;         // Jeans長を何セルで解像するか
 Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時）
 
 //追加 rotation parameters
-Real vphi0 = 0.0;   // cylindrical rotational velocity
 Real vr0   = 0.0;   // radial velocity
 
 //===== Toyouchi+23 parameters =====
@@ -112,7 +111,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
   //追加 回転パラメータ読み込み
-  vphi0 = pin->GetOrAddReal("problem","vphi0", 0.0);
   vr0   = pin->GetOrAddReal("problem","vr0", 0.0);
 
   // raccを入力ファイルから
@@ -237,29 +235,23 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         Real r_cut = std::max(racc, 1e-12); // 入力ファイルでracc=0.44としているが念の為下限値を設定
 
         // --- 回転速度（解析的M_encを使用）---
-        if (vphi0 != 0.0) {
-            Real vphi_eff = vphi0;
+        // --- gas enclosed mass (Toyouchi+23) ---
+	Real M_gas = 4.0 * M_PI * 0.11 * pow(r_cyl, 1.25) / 1.25;
 
-            // 中心で滑らかにゼロへ（二次減衰で安定化）
-            if (r_cyl < r_cut) {
-                vphi_eff *= (r_cyl / r_cut) * (r_cyl / r_cut);
-            }
+	// --- Toyouchi rotation: 0.5 vkep (gas only) ---
+	Real vphi_eff = 0.0;
+	if (r_cyl > 0.0) {
+    	    vphi_eff = 0.5 * std::sqrt(gconst * M_gas / r_cyl);
+	}
 
-            // ケプラー上限の計算（M_enc = 星質量 + ガス質量）
-            // ρ = 0.11 * r^{-1.75} の解析的積分
-            // M_gas(r) = 4π * 0.11 * r^{1.25} / 1.25
-            Real M_gas = 4.0 * M_PI * 0.11 * pow(r_cyl, 1.25) / 1.25;
-            Real M_enc = Mstar + M_gas;
-            
-            Real v_max_rot = std::sqrt(gconst * M_enc / std::max(r_cyl, r_cut));
-            if (vphi_eff > v_max_rot && v_max_rot > 0) {
-                vphi_eff = 0.9 * v_max_rot;
-            }
-
-            Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
-            vx += -vphi_eff * y * inv_r;
-            vy +=  vphi_eff * x * inv_r;
+        // 中心で滑らかにゼロへ（二次減衰で安定化）
+        if (r_cyl < r_cut) {
+            vphi_eff *= (r_cyl / r_cut) * (r_cyl / r_cut);
         }
+
+        Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
+        vx += -vphi_eff * y * inv_r;
+        vy +=  vphi_eff * x * inv_r;
 
         // --- radial inflow ---
         if (vr0 != 0.0) {
