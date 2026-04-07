@@ -66,7 +66,8 @@ Real cs2, gam, gm1, gconst;
 bool use_jeans_refine = true;   // Jeans長ベースのリファインを使用するか
 bool use_grad_refine = false;   // 密度勾配ベースのリファインを使用するか
 Real jeans_cells = 8.0;         // Jeans長を何セルで解像するか
-Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時）
+Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時)
+Real derefine_thr = 0.1;
 
 //追加 rotation parameters
 Real vr0   = 0.0;   // radial velocity
@@ -160,13 +161,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     if (use_grad_refine) {
       // 密度勾配の閾値（必須パラメータ）
       refine_thr = pin->GetReal("problem", "refine_thr");
+      derefine_thr = pin->GetOrAddReal("problem", "derefine_thr", 0.1);
       
       // グローバル変数に保存
       ::use_grad_refine = use_grad_refine;
       ::refine_thr = refine_thr;
+      ::derefine_thr = derefine_thr;
       
       std::cout << "AMR: Density gradient refinement enabled" << std::endl;
-      std::cout << "     Gradient threshold = " << refine_thr << std::endl;
+      std::cout << "     refine_thr   = " << refine_thr << std::endl;
+      std::cout << "     derefine_thr = " << derefine_thr << std::endl;
     }
     
     // 両方のリファイン方式が有効な場合のメッセージ
@@ -383,13 +387,11 @@ int RefinementCondition(MeshBlock *pmb) {
     }
   }
 
-  if (use_grad_refine) {
-    if (gradmax > 0.5 * refine_thr) {
-      need_derefine = false;
-    }
+  if (use_grad_refine && gradmax > derefine_thr) {  // gradによるderefine（ヒステリシス）
+    need_derefine = false;
   }
 
-  if (need_refine) return 1;
-  if (need_derefine) return -1;
-  return 0;
+  if (need_refine) return 1;  // 細かくする
+  else if (need_derefine) return -1;  // 粗くする
+  else return 0;  // そのまま現状維持
 }
