@@ -74,8 +74,8 @@ grav_const = 1.0
 vr0   = 0.0   # ←  最初は0
 racc  = 0.44
 # AMRリファイン設定
-#use_jeans_refine = true    # Jeans長ベースのリファイン
-#jeans_cells      = 8.0     # Jeans長を8セルで解像
+use_jeans_refine = true    # Jeans長ベースのリファイン
+jeans_cells      = 8.0     # Jeans長を8セルで解像
 
 # 密度勾配リファイン（オプション）
 # 使用する場合は以下を有効にし、refine_thrを適切に設定(推奨)
