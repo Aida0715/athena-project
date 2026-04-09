@@ -2,7 +2,7 @@
 
 # commit: 7cef4da  //本シミュレーションに対応するjeans.cppをgitの履歴から追跡可
 # refine/derefineにヒステリシスを導入
-# grad refineのみ有効
+# AMRは完全ON
 
 cd "$(dirname "$0")/.."
 
