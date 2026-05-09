@@ -39,7 +39,7 @@ cd $OUTDIR
  #Code coverage flags:          OFF
  #Linker flags:                  
  #Floating-point precision:     double
- #Number of ghost cells:        2
+ #Number of ghost cells:        4
  #MPI parallelism:              OFF
  #OpenMP parallelism:           OFF
  #FFT:                          OFF
