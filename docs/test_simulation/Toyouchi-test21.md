@@ -1,0 +1,56 @@
+# Toyouchi-test21
+
+## 1. 目的
+AMRはjeansリファイン・密度勾配両方ONにして、AMRの動作及び解像度の確認
+回転(vr,vphi)、中心星重力、自己重力は完全OFF
+
+## 2. 参照
+論文：
+Toyouchi+2023:https: //arxiv.org/pdf/2206.14459
+
+## 3. 使用コード状態
+commit ID: a2f95b5
+変更点: AMRは完全ON
+
+## 4. ビルド設定（configure）
+　#Problem generator:          Toyouchi
+  #Coordinate system:          cartesian
+  #Equation of state:          isothermal
+  #Riemann solver:             hlle
+  #Magnetic fields:            OFF
+  #Relativistic dynamics:      OFF 
+  #General relativity:         OFF 
+  #Radiative Transfer:         OFF
+  #Implicit Radiation:         OFF
+  #Cosmic Ray Transport:       OFF
+  #Cosmic Ray Diffusion:       OFF
+  #Self-Gravity:               OFF
+  #Super-Time-Stepping:        OFF
+  #Floating-point precision:   double
+  #Number of ghost cells:      4
+  #MPI parallelism:            OFF
+  #OpenMP parallelism:         OFF
+  #FFT:                        OFF
+  #HDF5 output:                OFF
+  #Compiler:                   g++
+  #Compilation command:        g++ -O3 -std=c++11
+
+## 5. 対応run
+Toyouchi-test21.sh
+
+## 6.計算ログ
+Terminating on time limit
+time=1.0000000000000000e+03 cycle=18
+tlim=1.0000000000000000e+03 nlim=50000
+Number of MeshBlocks = 64; 56  created, 0 destroyed during this simulation.
+zone-cycles = 37748736
+cpu time used  = 1.5774525000000001e+01
+zone-cycles/cpu_second = 2.3930188706157552e+06
+
+## 7.結果・考察等
+外向きのガス圧のみ作用して拡散し、潰れていない。
+AMRはレベル1で作動し、test20よりも多少解像度は上がった。
+test20と比較すると、現段階では密度勾配条件でのみ作動しているようである。
+
+## 8.備考
+VTKファイルはすべて削除
