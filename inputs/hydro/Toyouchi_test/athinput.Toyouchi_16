@@ -8,7 +8,7 @@ problem_id = Toyouchi    # problem ID: basename of output filenames
 
 <output1>
 file_type  = hst        # History data dump
-dt         = 0.05       # time increment between outputs
+dt         = 0.5       # time increment between outputs
 
 <output2>
 file_type  = vtk        # Binary data dump
@@ -19,7 +19,7 @@ ghost_zones= false
 <time>
 cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
 nlim       = 50000      # cycle limit for short tests
-tlim       = 1000        # time limit
+tlim       = 20         # time limit
 integrator  = vl2       # time integration algorithm
 xorder      = 3         # order of spatial reconstruction
 ncycle_out  = 1         # interval for stdout summary info
