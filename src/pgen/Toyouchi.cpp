@@ -76,6 +76,13 @@ bool use_rotation = true;  // 回転のON,OFFは入力ファイルで指定
 // 中心星重力
 bool use_central_gravity = true;  // 中心星重力のON,OFFは入力ファイルで指定
 
+// NFW halo gravity
+bool use_nfw_gravity = false;
+
+// NFW parameters
+const Real Phi0_NFW = 254.0;
+const Real Rs_NFW   = 85100.0;
+
 //===== Toyouchi+23 parameters =====
 Real epsilon_soft = 0.5;   // gravitational softening
 const Real Mstar = 1.0;    // central star mass (code unit:2solar_mass in CGS)
@@ -106,7 +113,9 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // 中心星重力のON,OFF読み込み
   use_central_gravity =
     pin->GetOrAddBoolean("problem","use_central_gravity",true);
-  if (use_central_gravity) {
+  use_nfw_gravity =
+    pin->GetOrAddBoolean("problem","use_nfw_gravity",false);
+  if (use_central_gravity || use_nfw_gravity) {
       EnrollUserExplicitSourceFunction(CentralGravity);
   }
 
@@ -316,11 +325,38 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
         Real r2 = x*x + y*y + z*z + epsilon_soft*epsilon_soft;
         Real r  = std::sqrt(r2);
 
-        Real fac = -gconst * Mstar / (r2 * r);
+	Real gx = 0.0;
+	Real gy = 0.0;
+	Real gz = 0.0;
 
-        Real gx = fac * x;
-        Real gy = fac * y;
-        Real gz = fac * z;
+        if (use_central_gravity) {
+   	    Real fac = -gconst*Mstar/(r2*r);
+
+   	    gx += fac*x;
+   	    gy += fac*y;
+   	    gz += fac*z;
+	}
+
+	if (use_nfw_gravity) {
+   	    Real rphys = r * Lunit;
+   	    Real xdm = rphys / Rs_NFW;
+
+   	    if (xdm > 1.0e-12) {
+       	        Real bracket =
+           	    xdm/(1.0+xdm)
+           	    - std::log(1.0+xdm);
+
+       	        Real gr =
+           	    (Phi0_NFW/Rs_NFW)
+           	    * bracket
+           	    /(xdm*xdm);
+
+       	        gx += gr * (x/r);
+                gy += gr * (y/r);
+                gz += gr * (z/r);
+   	    }
+
+	 }
 
         cons(IM1,k,j,i) += dt * prim(IDN,k,j,i) * gx;
         cons(IM2,k,j,i) += dt * prim(IDN,k,j,i) * gy;
