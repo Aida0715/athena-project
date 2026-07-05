@@ -351,6 +351,9 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
    	    gz += fac*z;
 	}
 
+	// デバック用
+	std::cout << "use_nfw_gravity = " << use_nfw_gravity << std::endl;
+
 	if (use_nfw_gravity) {
    	    Real rphys = r * Lunit;
    	    Real xdm = rphys / Rs_NFW;
