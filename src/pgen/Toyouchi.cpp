@@ -216,7 +216,6 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
-  std::cout << "Toyouchi ProblemGenerator called" << std::endl;
   // Determine mesh center (default sphere center)
   Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
   Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
@@ -365,6 +364,14 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
            	    (Phi0_NFW/Rs_NFW)
            	    * bracket
            	    /(xdm*xdm);
+
+		static bool first_nfw = true;
+		if (first_nfw) {
+  		  std::cout << "rphys = " << rphys
+            		    << "  xdm = " << xdm
+            		    << "  gr = " << gr << std::endl;
+  		  first_nfw = false;
+		}
 
 		pmb->user_out_var(0,k,j,i) = gr;
 
