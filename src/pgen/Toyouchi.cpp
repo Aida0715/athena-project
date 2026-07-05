@@ -319,6 +319,13 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons,
                     AthenaArray<Real> &cons_scalar) {
 
+  // デバッグ：この関数が呼ばれているか確認
+  static bool first = true;
+  if (first) {
+    std::cout << "CentralGravity called!" << std::endl;
+    first = false;
+  }
+
   Coordinates *pcoord = pmb->pcoord;
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
