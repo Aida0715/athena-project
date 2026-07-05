@@ -210,9 +210,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 //  \brief
 //========================================================================================
 
-void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   AllocateUserOutputVariables(1);
   SetUserOutputVariableName(0, "gr_nfw");
+}
+
+void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // Determine mesh center (default sphere center)
   Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
   Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
