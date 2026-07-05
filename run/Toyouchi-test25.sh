@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# commit: 2a8e0c7  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
+# commit: 978c07a  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # NFW追加,加速度をVTKへ出力するようソースコードいじった
 # 自己重力、中心星重力、 回転(vr,vphi)はOFF
 
