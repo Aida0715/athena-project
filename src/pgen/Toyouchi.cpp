@@ -79,9 +79,9 @@ bool use_central_gravity = true;  // 中心星重力のON,OFFは入力ファイ�
 // NFW halo gravity
 bool use_nfw_gravity = false;
 
-// NFW parameters
-const Real Phi0_NFW = 254.0;
-const Real Rs_NFW   = 85100.0;
+// NFW halo parameters (CGS)
+const Real Phi0_phys = 1.02e13;   // cm^2 s^-2
+const Real Rs_phys   = 5.71e20;   // cm
 
 //===== Toyouchi+23 parameters =====
 Real epsilon_soft = 0.5;   // gravitational softening
@@ -319,13 +319,6 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons,
                     AthenaArray<Real> &cons_scalar) {
 
-  // デバッグ：この関数が呼ばれているか確認
-  static bool first = true;
-  if (first) {
-    std::cout << "CentralGravity called!" << std::endl;
-    first = false;
-  }
-
   Coordinates *pcoord = pmb->pcoord;
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
@@ -351,37 +344,36 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
    	    gz += fac*z;
 	}
 
-	// デバック用
-	std::cout << "use_nfw_gravity = " << use_nfw_gravity << std::endl;
 
 	if (use_nfw_gravity) {
-   	    Real rphys = r * Lunit;
-   	    Real xdm = rphys / Rs_NFW;
+   	    // radius in CGS
+	    Real rphys = r * Lunit;
 
-   	    if (xdm > 1.0e-12) {
-       	        Real bracket =
-           	    xdm/(1.0+xdm)
-           	    - std::log(1.0+xdm);
+	    // x = r/Rs
+	    Real xdm = rphys / Rs_phys;
 
-       	        Real gr =
-           	    (Phi0_NFW/Rs_NFW)
-           	    * bracket
-           	    /(xdm*xdm);
+	    if (xdm > 1.0e-12) {
 
-		static bool first_nfw = true;
-		if (first_nfw) {
-  		  std::cout << "rphys = " << rphys
-            		    << "  xdm = " << xdm
-            		    << "  gr = " << gr << std::endl;
-  		  first_nfw = false;
-		}
+    	        Real bracket =
+        	    xdm/(1.0 + xdm)
+        	    - std::log(1.0 + xdm);
 
-		pmb->user_out_var(0,k,j,i) = gr;
+    		// NFW acceleration (CGS)
+    		Real gr_phys =
+        	    (Phi0_phys / Rs_phys)
+        	    * bracket
+        	    / (xdm * xdm);
 
-       	        gx += gr * (x/r);
-                gy += gr * (y/r);
-                gz += gr * (z/r);
-   	    }
+    		// CGS -> code unit
+    		Real gr =
+        	    gr_phys * (Tunit * Tunit / Lunit);
+
+    		pmb->user_out_var(0,k,j,i) = gr;
+
+    		gx += gr * (x/r);
+    		gy += gr * (y/r);
+    		gz += gr * (z/r);
+	     }
 
 	 }
 
