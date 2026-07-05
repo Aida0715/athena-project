@@ -211,6 +211,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  AllocateUserOutputVariables(1);
+  SetUserOutputVariableName(0, "gr_nfw");
   // Determine mesh center (default sphere center)
   Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
   Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
@@ -248,6 +250,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	Real P_final   = P_profile;
 
         phydro->u(IDN,k,j,i) = rho_final;
+
+	user_out_var(0,k,j,i) = 0.0;
 
         // 追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
@@ -350,6 +354,8 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
            	    (Phi0_NFW/Rs_NFW)
            	    * bracket
            	    /(xdm*xdm);
+
+		pmb->user_out_var(0,k,j,i) = gr;
 
        	        gx += gr * (x/r);
                 gy += gr * (y/r);
