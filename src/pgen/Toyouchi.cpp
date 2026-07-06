@@ -211,8 +211,9 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 //========================================================================================
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
-  AllocateUserOutputVariables(1);
-  SetUserOutputVariableName(0, "gr_nfw");
+  AllocateUserOutputVariables(2);
+  SetUserOutputVariableName(0, "gr_star");
+  SetUserOutputVariableName(1, "gr_nfw");
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
@@ -254,7 +255,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         phydro->u(IDN,k,j,i) = rho_final;
 
-	user_out_var(0,k,j,i) = 0.0;
+	user_out_var(0,k,j,i) = 0.0;   // star
+	user_out_var(1,k,j,i) = 0.0;   // nfw
 
         // 追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
@@ -339,6 +341,10 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
         if (use_central_gravity) {
    	    Real fac = -gconst*Mstar/(r2*r);
 
+	    Real gr_star = fac * std::sqrt(x*x + y*y + z*z);
+
+	    pmb->user_out_var(0,k,j,i) = gr_star;
+
    	    gx += fac*x;
    	    gy += fac*y;
    	    gz += fac*z;
@@ -368,7 +374,7 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
     		Real gr =
         	    gr_phys * (Tunit * Tunit / Lunit);
 
-    		pmb->user_out_var(0,k,j,i) = gr;
+    		pmb->user_out_var(1,k,j,i) = gr;
 
     		gx += gr * (x/r);
     		gy += gr * (y/r);
