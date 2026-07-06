@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# commit: 5e17b2d  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
+# commit: 9dd8f2a  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # 自己重力、中心星重力、 回転(vr,vphi)すべてONに戻した
 
 cd "$(dirname "$0")/.."
