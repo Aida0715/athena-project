@@ -3,15 +3,17 @@
 # commit: 9dd8f2a  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # 自己重力、中心星重力、 回転(vr,vphi)すべてONに戻した
 
-cd "$(dirname "$0")/.."
+ATHENA=$HOME/athena-project
+WORK=/work/beta/aida
 
-OUTDIR=results/Toyouchi-test26
+OUTDIR=$WORK/results/Toyouchi-test26
 mkdir -p $OUTDIR
 cd $OUTDIR
 
 # 実行（ファイル名はinputに任せる）
 # 環境作成中のテスト計算用入力ファイルはToyouchi_testディレクトリに格納
-../../bin/athena -i ../../inputs/hydro/Toyouchi_test/athinput.Toyouchi_18
+"$ATHENA/bin/athena" \
+    -i "$ATHENA/inputs/hydro/Toyouchi_test/athinput.Toyouchi_18"
 
   #Problem generator:            Toyouchi
   #Coordinate system:            cartesian
