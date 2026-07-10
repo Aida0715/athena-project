@@ -383,9 +383,44 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 
 	 }
 
+	 // ===== Debug print (before source update) =====
+        if (Globals::my_rank == 0 &&
+            pmb->gid == 435 &&
+            i == 0 && j == 31 && k == 31) {
+
+          std::cout
+            << "\n===== DEBUG CentralGravity =====\n"
+            << "time = " << time
+            << "  dt = " << dt << "\n"
+            << "gid = " << pmb->gid << "\n"
+            << "r = " << r << "\n"
+            << "gx = " << gx
+            << " gy = " << gy
+            << " gz = " << gz << "\n"
+            << "rho = " << prim(IDN,k,j,i) << "\n"
+            << "before M = ("
+            << cons(IM1,k,j,i) << ", "
+            << cons(IM2,k,j,i) << ", "
+            << cons(IM3,k,j,i) << ")"
+            << std::endl;
+        }
+
         cons(IM1,k,j,i) += dt * prim(IDN,k,j,i) * gx;
         cons(IM2,k,j,i) += dt * prim(IDN,k,j,i) * gy;
         cons(IM3,k,j,i) += dt * prim(IDN,k,j,i) * gz;
+
+	// ===== Debug print (after source update) =====
+        if (Globals::my_rank == 0 &&
+            pmb->gid == 435 &&
+            i == 0 && j == 31 && k == 31) {
+
+          std::cout
+            << "after  M = ("
+            << cons(IM1,k,j,i) << ", "
+            << cons(IM2,k,j,i) << ", "
+            << cons(IM3,k,j,i) << ")"
+            << std::endl;
+        }
       }
     }
   }
