@@ -45,10 +45,6 @@
 #include <omp.h>
 #endif
 
-#if MAGNETIC_FIELDS_ENABLED
-#error "This problem generator does not support magnetic fields"
-#endif
-
 void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     const AthenaArray<Real> &prim,
                     const AthenaArray<Real> &prim_scalar,
@@ -102,6 +98,11 @@ const Real AU = 1.496e13;
 // 中心カットオフ用
 Real racc = 0.0;   // accretion radius (cutoff scale)
 
+// ===== magnetic field =====
+Real bz_microgauss = 0.0;  // input value [microgauss]
+Real bz_code = 0.0;        // Athena++へ実際に渡す無次元磁場(z方向)
+Real Bunit = 0.0;          // magnetic-field unit [Gauss]
+
 } // namespace
 
 
@@ -135,6 +136,25 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // raccを入力ファイルから
   racc = pin->GetOrAddReal("problem", "racc", 0.44);
+
+  //磁場の強さを入力ファイルから読み込む(μG単位)
+  bz_microgauss = pin->GetOrAddReal("problem", "bz_microgauss", 0.0);
+
+  // CGS→コード単位の変換基準
+  Bunit = std::sqrt(4.0*M_PI*Punit);
+
+　// 磁場をCGS→コード単位へ変換
+  Real bz_phys = bz_microgauss * 1.0e-6;  // μG→Gaussに変換
+  bz_code = bz_phys / Bunit;
+
+  // 磁場関連のメッセージ表示
+  if (Globals::my_rank == 0) {
+    std::cout
+        << "Initial vertical magnetic field:" << std::endl
+        << "  Bz physical = " << bz_microgauss << " microgauss" << std::endl
+        << "  B unit      = " << Bunit << " Gauss" << std::endl
+        << "  Bz code     = " << bz_code << std::endl;
+  }
 
   //重力定数（入力ファイルから読み込む）
   if (SELF_GRAVITY_ENABLED) {
@@ -307,8 +327,44 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         if (NON_BAROTROPIC_EOS) {
 	  Real ke = 0.5 * rho_final *
          	    (vx*vx + vy*vy + vz*vz);
- 	  phydro->u(IEN,k,j,i) = P_final/gm1 + ke;
+          Real me = 0.0;
+          if (MAGNETIC_FIELDS_ENABLED) {
+            // Athena++ではPmag,code = Bcode * Bcode / 2
+            me = 0.5 * bz_code * bz_code;
+          }
+          phydro->u(IEN,k,j,i) = P_final/gm1 + ke + me;
 	}
+      }
+    }
+  }
+
+  if (MAGNETIC_FIELDS_ENABLED) {
+    // Initialize face-centered magnetic field: B = (0, 0, bz_code)
+
+    // Bx on x1 faces
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=is; i<=ie+1; ++i) {
+          pfield->b.x1f(k,j,i) = 0.0;
+        }
+      }
+    }
+
+    // By on x2 faces
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je+1; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          pfield->b.x2f(k,j,i) = 0.0;
+        }
+      }
+    }
+
+    // Bz on x3 faces
+    for (int k=ks; k<=ke+1; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          pfield->b.x3f(k,j,i) = bz_code;
+        }
       }
     }
   }
