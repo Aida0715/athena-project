@@ -44,7 +44,7 @@ ix3_bc     = outflow   # inner-X3 boundary flag
 ox3_bc     = outflow   # outer-X3 boundary flag
 
 #AMRは完全ON
-refinement = adaptive
+refinement = none
 numlevel = 6
 derefine_count = 10
 
