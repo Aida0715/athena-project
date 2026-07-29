@@ -54,6 +54,8 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 
 int RefinementCondition(MeshBlock *pmb); // AMRのリファインメント宣言
 
+Real SinkHistory(MeshBlock *pmb, int iout); // hstファイルへ中心星質量・降着率を出力
+
 namespace {
 // with functions A1,2,3 which compute vector potentials
 Real cs2, gam, gm1, gconst;
@@ -81,7 +83,6 @@ const Real Rs_phys   = 5.71e20;   // cm
 
 //===== Toyouchi+23 parameters =====
 Real epsilon_soft = 0.5;   // gravitational softening
-const Real Mstar = 1.0;    // central star mass (code unit:2solar_mass in CGS)
 
 // ===== unit system (code unit <-> cgs) =====
 const Real Munit = 4.0e33;   // g (central star mass)
@@ -95,8 +96,30 @@ const Real Punit = Rhounit*Vunit*Vunit;         // pressure unit
 // unit conversion
 const Real AU = 1.496e13;
 
-// 中心カットオフ用
+// 中心カットオフ用（速度減衰）
 Real racc = 0.0;   // accretion radius (cutoff scale)
+
+// ===== シンク用変数の宣言 =====
+bool use_sink = true;
+
+// シンク半径
+Real r_sink = 0.0;
+
+// シンク内部に残す密度フロア
+Real sink_rho_floor = 1.0e-8;
+
+// シンク表面の外側で逆流を抑制する幅
+// 各セルで sink_no_outflow_cells * dx として使用
+Real sink_no_outflow_cells = 1.0;
+
+// AMRで強制的に細分化するシンク外側の幅
+Real sink_refine_buffer = 1.0;
+
+// 診断量を格納する添字
+enum SinkDataIndex {
+  SINK_MSTAR = 0, // 現在の中心星質量
+  SINK_MDOT  = 1  // 直前のタイムステップの降着率
+};
 
 // ===== magnetic field =====
 Real bz_microgauss = 0.0;  // input value [microgauss]
@@ -110,7 +133,58 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   epsilon_soft = pin->GetOrAddReal("problem","epsilon",0.5);
   gconst = pin->GetOrAddReal("problem","grav_const",1.0);
-  
+
+  // ===== sink parameters =====
+  use_sink =
+      pin->GetOrAddBoolean("problem", "use_sink", true);
+
+  // シンク半径の入力はAU単位、内部ではコード単位を使用
+  Real r_sink_au =
+      pin->GetOrAddReal("problem", "r_sink_au", 1000.0);
+  r_sink = r_sink_au * AU / Lunit;
+   
+  // シンク領域内の密度フロア
+  sink_rho_floor =
+      pin->GetOrAddReal("problem", "sink_rho_floor", 1.0e-8);
+
+  // シンク表面で外向き流を禁止するセル数
+  sink_no_outflow_cells =
+      pin->GetOrAddReal("problem", "sink_no_outflow_cells", 1.0);
+
+  // シンク半径に対する外側バッファの比率
+  Real sink_refine_buffer_factor =
+      pin->GetOrAddReal("problem", "sink_refine_buffer_factor", 1.0);
+  sink_refine_buffer = sink_refine_buffer_factor * r_sink;
+
+  // 中心星の初期質量（２M_solar）
+  Real mstar_init =
+      pin->GetOrAddReal("problem", "mstar_init", 1.0);
+  // ===== sink parameters読み込み終わり =====
+      
+  // restartファイルへ保存されるMeshデータ
+  // Athena++のrestart読み込みでは、この初期値はrestartファイル中の値で上書きされる。したがって再スタート時にも成長後の中心星質量を引き継げる
+  AllocateRealUserMeshDataField(1);
+  ruser_mesh_data[0].NewAthenaArray(2);
+  ruser_mesh_data[0](SINK_MSTAR) = mstar_init;
+  ruser_mesh_data[0](SINK_MDOT)  = 0.0;
+
+  // 履歴出力を登録する
+  AllocateUserHistoryOutput(2);
+  EnrollUserHistoryOutput(0, SinkHistory, "Mstar");
+  EnrollUserHistoryOutput(1, SinkHistory, "Mdot_sink");
+
+  // 初期設定をログに表示
+  if (Globals::my_rank == 0) {
+    std::cout
+        << "Sink region:" << std::endl
+        << "  enabled          = " << use_sink << std::endl
+        << "  r_sink           = " << r_sink << " code units" << std::endl
+        << "  r_sink           = " << r_sink_au << " AU" << std::endl
+        << "  rho floor        = " << sink_rho_floor << std::endl
+        << "  initial Mstar    = " << mstar_init << " code units"
+        << std::endl;
+  }
+
   // 中心星重力のON,OFF読み込み
   use_central_gravity =
     pin->GetOrAddBoolean("problem","use_central_gravity",true);
@@ -143,7 +217,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // CGS→コード単位の変換基準
   Bunit = std::sqrt(4.0*M_PI*Punit);
 
-　// 磁場をCGS→コード単位へ変換
+  // 磁場をCGS→コード単位へ変換
   Real bz_phys = bz_microgauss * 1.0e-6;  // μG→Gaussに変換
   bz_code = bz_phys / Bunit;
 
@@ -165,18 +239,25 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   if (adaptive) {
     // AMRリファイン方式の選択（入力ファイルから読み込み）
     // デフォルト：Jeans長ベースのリファインを使用（自己重力系では必須）
-    bool use_jeans_refine = pin->GetOrAddBoolean("problem", "use_jeans_refine", true);
-    bool use_grad_refine  = pin->GetOrAddBoolean("problem", "use_grad_refine", false);
+    bool jeans_refine_input =
+        pin->GetOrAddBoolean("problem", "use_jeans_refine", true);
+    bool grad_refine_input =
+        pin->GetOrAddBoolean("problem", "use_grad_refine", false);
     
     // 入力パラメータのチェックと警告
-    if (!use_jeans_refine && !use_grad_refine) {
+    // 両方OFFの場合はjeansリファインが作動する
+    if (!jeans_refine_input && !grad_refine_input) {
       std::cout << "WARNING: AMR enabled but no refinement condition specified!" << std::endl;
       std::cout << "         Enabling Jeans length refinement as default." << std::endl;
-      use_jeans_refine = true;
+      jeans_refine_input = true;
     }
+
+    // namespace内の変数へ必ず反映する（falseの場合も古い初期値を残さない）
+    use_jeans_refine = jeans_refine_input;
+    use_grad_refine = grad_refine_input;
     
     // Jeans長ベースのリファインが有効な場合のパラメータ読み込み
-    if (use_jeans_refine) {
+    if (jeans_refine_input) {
       // Jeans長を何セルで解像するか（デフォルト: 8.0）
       Real jeans_cells = pin->GetOrAddReal("problem", "jeans_cells", 8.0);
       
@@ -189,7 +270,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       
       // グローバル変数に保存（RefinementCondition関数で使用）
       // 注：これらの変数はnamespace内で定義されている必要があります
-      ::use_jeans_refine = use_jeans_refine;
       ::jeans_cells = jeans_cells;
       
       std::cout << "AMR: Jeans length refinement enabled" << std::endl;
@@ -197,13 +277,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     }
     
     // 密度勾配ベースのリファインが有効な場合のパラメータ読み込み
-    if (use_grad_refine) {
+    if (grad_refine_input) {
       // 密度勾配の閾値（必須パラメータ）
       refine_thr = pin->GetReal("problem", "refine_thr");
       derefine_thr = pin->GetOrAddReal("problem", "derefine_thr", 0.1);
       
       // グローバル変数に保存
-      ::use_grad_refine = use_grad_refine;
       ::refine_thr = refine_thr;
       ::derefine_thr = derefine_thr;
       
@@ -213,7 +292,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     }
     
     // 両方のリファイン方式が有効な場合のメッセージ
-    if (use_jeans_refine && use_grad_refine) {
+    if (jeans_refine_input && grad_refine_input) {
       std::cout << "AMR: Using BOTH Jeans length AND density gradient refinement" << std::endl;
       std::cout << "     (refine if EITHER condition is met)" << std::endl;
     }
@@ -238,6 +317,7 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // Determine mesh center (default sphere center)
+  // 計算領域が原点対称なので、これらは原点になる
   Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
   Real y0 = 0.5*(pmy_mesh->mesh_size.x2min + pmy_mesh->mesh_size.x2max);
   Real z0 = 0.5*(pmy_mesh->mesh_size.x3min + pmy_mesh->mesh_size.x3max);
@@ -272,6 +352,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         Real rho_final = rho_profile;
 	Real P_final   = P_profile;
+
+        // 初期状態ではシンク内部を低密度にしておく。
+        // この初期除去分は中心星への降着量には数えない。
+        if (use_sink && r_sph < r_sink) {
+          rho_final = sink_rho_floor;
+          P_final   = sink_rho_floor * cs * cs;
+        }
 
         phydro->u(IDN,k,j,i) = rho_final;
 
@@ -316,6 +403,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
             vx += vr_eff * x * inv_r;
             vy += vr_eff * y * inv_r;
+        }
+
+        // シンク領域内部の速度をゼロにする
+        if (use_sink && r_sph < r_sink) {
+          vx = 0.0;
+          vy = 0.0;
+          vz = 0.0;
         }
 
         //追加 set momentum
@@ -378,14 +472,20 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons_scalar) {
 
   Coordinates *pcoord = pmb->pcoord;
+  const Real x0 = 0.5 * (pmb->pmy_mesh->mesh_size.x1min
+                       + pmb->pmy_mesh->mesh_size.x1max);
+  const Real y0 = 0.5 * (pmb->pmy_mesh->mesh_size.x2min
+                       + pmb->pmy_mesh->mesh_size.x2max);
+  const Real z0 = 0.5 * (pmb->pmy_mesh->mesh_size.x3min
+                       + pmb->pmy_mesh->mesh_size.x3max);
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
       for (int i=pmb->is; i<=pmb->ie; ++i) {
 
-        Real x = pcoord->x1v(i);
-        Real y = pcoord->x2v(j);
-        Real z = pcoord->x3v(k);
+        Real x = pcoord->x1v(i) - x0;
+        Real y = pcoord->x2v(j) - y0;
+        Real z = pcoord->x3v(k) - z0;
 
         Real r2 = x*x + y*y + z*z + epsilon_soft*epsilon_soft;
         Real r  = std::sqrt(r2);
@@ -395,7 +495,10 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 	Real gz = 0.0;
 
         if (use_central_gravity) {
-   	    Real fac = -gconst*Mstar/(r2*r);
+        // 降着により増加した中心星質量が次のタイムステップで中心星重力に反映
+        Real mstar =
+            pmb->pmy_mesh->ruser_mesh_data[0](SINK_MSTAR);
+   	    Real fac = -gconst*mstar/(r2*r);
 
 	    Real gr_star = fac * std::sqrt(x*x + y*y + z*z);
 
@@ -483,10 +586,215 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 }
   //  pmy_mesh->tlim=pin->SetReal("time","tlim",TWO_PI/omega*2.0);
 
+  void Mesh::UserWorkInLoop() {
+    if (!use_sink) {
+      ruser_mesh_data[0](SINK_MDOT) = 0.0;
+      return;
+    }
+  
+    Real removed_mass_local = 0.0;
+  
+    const Real x0 = 0.5 * (mesh_size.x1min + mesh_size.x1max);
+    const Real y0 = 0.5 * (mesh_size.x2min + mesh_size.x2max);
+    const Real z0 = 0.5 * (mesh_size.x3min + mesh_size.x3max);
+  
+    // このMPIランクが所有する全MeshBlockを処理する
+    for (int n = 0; n < nblocal; ++n) {
+      MeshBlock *pmb = my_blocks(n);
+  
+      AthenaArray<Real> &u = pmb->phydro->u;
+      AthenaArray<Real> &w = pmb->phydro->w;
+  
+      for (int k = pmb->ks; k <= pmb->ke; ++k) {
+        for (int j = pmb->js; j <= pmb->je; ++j) {
+          for (int i = pmb->is; i <= pmb->ie; ++i) {
+            const Real x = pmb->pcoord->x1v(i) - x0;
+            const Real y = pmb->pcoord->x2v(j) - y0;
+            const Real z = pmb->pcoord->x3v(k) - z0;
+  
+            const Real r = std::sqrt(x*x + y*y + z*z);
+  
+            const Real dx = std::min({
+                pmb->pcoord->dx1v(i),
+                pmb->pcoord->dx2v(j),
+                pmb->pcoord->dx3v(k)
+            });
+  
+            // ============================================================
+            // 1. シンク内部：ガスを密度フロアまで吸収
+            // ============================================================
+            if (r < r_sink) {
+              const Real rho_old = u(IDN,k,j,i);
+              const Real rho_new = sink_rho_floor;
+  
+              if (rho_old > rho_new) {
+                const Real cell_volume =
+                    pmb->pcoord->GetCellVolume(k,j,i);
+  
+                removed_mass_local +=
+                    (rho_old - rho_new) * cell_volume;
+              }
+  
+              // isothermal EOSなのでエネルギー変数はない
+              u(IDN,k,j,i) = rho_new;
+              u(IM1,k,j,i) = 0.0;
+              u(IM2,k,j,i) = 0.0;
+              u(IM3,k,j,i) = 0.0;
+  
+              // Conserved変数だけでなくPrimitive変数も更新する
+              w(IDN,k,j,i) = rho_new;
+              w(IVX,k,j,i) = 0.0;
+              w(IVY,k,j,i) = 0.0;
+              w(IVZ,k,j,i) = 0.0;
+  
+              continue;
+            }
+  
+            // ============================================================
+            // 2. シンク表面の外側：外向き速度成分を禁止
+            // ============================================================
+            const Real shell_outer =
+                r_sink + sink_no_outflow_cells * dx;
+  
+            if (r < shell_outer && r > 0.0) {
+              const Real inv_r = 1.0 / r;
+  
+              const Real vx = w(IVX,k,j,i);
+              const Real vy = w(IVY,k,j,i);
+              const Real vz = w(IVZ,k,j,i);
+  
+              const Real vr =
+                  (vx*x + vy*y + vz*z) * inv_r;
+  
+              // vr > 0 はシンク中心から外向き
+              if (vr > 0.0) {
+                const Real vx_new = vx - vr*x*inv_r;
+                const Real vy_new = vy - vr*y*inv_r;
+                const Real vz_new = vz - vr*z*inv_r;
+  
+                w(IVX,k,j,i) = vx_new;
+                w(IVY,k,j,i) = vy_new;
+                w(IVZ,k,j,i) = vz_new;
+  
+                const Real rho = u(IDN,k,j,i);
+  
+                u(IM1,k,j,i) = rho * vx_new;
+                u(IM2,k,j,i) = rho * vy_new;
+                u(IM3,k,j,i) = rho * vz_new;
+              }
+            }
+          }
+        }
+      }
+    }
+  
+    // 全MPIランクの除去質量を合算する
+    Real removed_mass_global = removed_mass_local;
+  
+  #ifdef MPI_PARALLEL
+    MPI_Allreduce(MPI_IN_PLACE, &removed_mass_global, 1,
+                  MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
+  #endif
+  
+    // 中心星質量を更新
+    ruser_mesh_data[0](SINK_MSTAR) += removed_mass_global;
+  
+    // コード単位での瞬間降着率
+    if (dt > 0.0) {
+      ruser_mesh_data[0](SINK_MDOT) =
+          removed_mass_global / dt;
+    } else {
+      ruser_mesh_data[0](SINK_MDOT) = 0.0;
+    }
+  
+    if (Globals::my_rank == 0
+        && ncycle_out > 0
+        && ncycle % ncycle_out == 0) {
+      std::cout
+          << "Sink: Mstar = "
+          << ruser_mesh_data[0](SINK_MSTAR)
+          << ", Mdot = "
+          << ruser_mesh_data[0](SINK_MDOT)
+          << ", dM = "
+          << removed_mass_global
+          << std::endl;
+    }
+  }
+
+// hst出力関数を追加する（hstにはコード単位で、Mstar、Mdot_sinkが追加される）
+Real SinkHistory(MeshBlock *pmb, int iout) {
+  // History出力は全MeshBlockについて和を取る。
+  // 同じMstarを全ブロックから返すとブロック数倍になるため、
+  // gid == 0 のブロックだけが値を返す。
+  if (pmb->gid != 0) {
+    return 0.0;
+  }
+
+  if (iout == 0) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MSTAR);
+  }
+
+  if (iout == 1) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT);
+  }
+
+  return 0.0;
+}
+
 int RefinementCondition(MeshBlock *pmb) {
 
   bool need_refine = false;
   bool need_derefine = true;
+
+  // シンク周辺の強制リファイン（シンク表面周辺ではセルを細かくしておきたい）
+  const Real x0 =
+      0.5 * (pmb->pmy_mesh->mesh_size.x1min
+           + pmb->pmy_mesh->mesh_size.x1max);
+  const Real y0 =
+      0.5 * (pmb->pmy_mesh->mesh_size.x2min
+           + pmb->pmy_mesh->mesh_size.x2max);
+  const Real z0 =
+      0.5 * (pmb->pmy_mesh->mesh_size.x3min
+           + pmb->pmy_mesh->mesh_size.x3max);
+
+  // セル中心ではなく、MeshBlockとシンク球の最短距離で判定する。
+  // これにより、基本格子がシンクより粗くても中心ブロックの細分化を開始できる。
+  const Real xmin = pmb->block_size.x1min - x0;
+  const Real xmax = pmb->block_size.x1max - x0;
+  const Real ymin = pmb->block_size.x2min - y0;
+  const Real ymax = pmb->block_size.x2max - y0;
+  const Real zmin = pmb->block_size.x3min - z0;
+  const Real zmax = pmb->block_size.x3max - z0;
+
+  Real dx_block = 0.0;
+  Real dy_block = 0.0;
+  Real dz_block = 0.0;
+
+  if (xmin > 0.0) {
+    dx_block = xmin;
+  } else if (xmax < 0.0) {
+    dx_block = -xmax;
+  }
+  if (ymin > 0.0) {
+    dy_block = ymin;
+  } else if (ymax < 0.0) {
+    dy_block = -ymax;
+  }
+  if (zmin > 0.0) {
+    dz_block = zmin;
+  } else if (zmax < 0.0) {
+    dz_block = -zmax;
+  }
+
+  const Real block_min_radius =
+      std::sqrt(dx_block*dx_block + dy_block*dy_block + dz_block*dz_block);
+  const bool sink_region_in_block =
+      use_sink && block_min_radius < r_sink + sink_refine_buffer;
+
+  if (sink_region_in_block) {
+    need_refine = true;
+    need_derefine = false;
+  }
 
   Real cs_iso = std::sqrt(cs2);
 
@@ -498,6 +806,7 @@ int RefinementCondition(MeshBlock *pmb) {
       for (int i = pmb->is+1; i <= pmb->ie-1; ++i) {
 
         Real rho = pmb->phydro->w(IDN, k, j, i);
+
         Real rho_safe = std::max(rho, 1e-20);
 
         // 音速
