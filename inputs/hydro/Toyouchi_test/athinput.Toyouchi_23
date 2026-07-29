@@ -84,7 +84,7 @@ use_nfw_gravity     = false
 epsilon = 0.22  #gravitational softning
 grav_const = 1.0
 use_rotation = false  #vphi
-vr0   = 0  #弱い降着流
+vr0   = 0.0  #弱い降着流
 racc  = 0.44
 bz_microgauss = 0  #磁場Bzの強さ(μG単位)
 # AMRリファイン設定
