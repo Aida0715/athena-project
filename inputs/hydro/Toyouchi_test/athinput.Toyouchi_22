@@ -18,7 +18,7 @@ ghost_zones= false
 
 <time>
 cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim       = 50000      # cycle limit for short tests
+nlim       = -1      # cycle limit
 tlim       = 26300         # time limit
 integrator  = vl2       # time integration algorithm
 xorder      = 2         # order of spatial reconstruction
