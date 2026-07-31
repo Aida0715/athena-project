@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# commit: 3cc79ae  //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
+# commit: bb069ed //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # Takasao+22の計算時間tlim=26.3Myrに合わせた。(AMRと回転をOFF)Bz=3μGの磁場はTest29と同じ。
 
 ATHENA=$HOME/athena-project
@@ -12,7 +12,8 @@ cd $OUTDIR
 
 # 実行（ファイル名はinputに任せる）
 # 環境作成中のテスト計算用入力ファイルはToyouchi_testディレクトリに格納
-"$ATHENA/bin/athena" \
+# 並列計算のコア数は-np32のように指定する
+mpirun -np 32 "$ATHENA/bin/athena" \
     -i "$ATHENA/inputs/hydro/Toyouchi_test/athinput.Toyouchi_22"
 
   #Problem generator:            Toyouchi
