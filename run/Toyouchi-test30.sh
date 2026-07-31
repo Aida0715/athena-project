@@ -13,7 +13,8 @@ cd $OUTDIR
 # 実行（ファイル名はinputに任せる）
 # 環境作成中のテスト計算用入力ファイルはToyouchi_testディレクトリに格納
 # 並列計算のコア数は-np32のように指定する
-mpirun -np 32 "$ATHENA/bin/athena" \
+unset DISPLAY  #GUIを使わない
+mpirun --use-hwthread-cpus -np 32 "$ATHENA/bin/athena" \
     -i "$ATHENA/inputs/hydro/Toyouchi_test/athinput.Toyouchi_22"
 
   #Problem generator:            Toyouchi
