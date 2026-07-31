@@ -41,7 +41,7 @@ mpirun -np 32 "$ATHENA/bin/athena" \
   #Linker flags:                  
   #Floating-point precision:     double
   #Number of ghost cells:        4
-  #MPI parallelism:              OFF
+  #MPI parallelism:              ON
   #OpenMP parallelism:           OFF
   #FFT:                          OFF
   #HDF5 output:                  OFF
