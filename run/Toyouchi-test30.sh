@@ -1,21 +1,68 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
 
 # commit: bb069ed //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # Takasao+22の計算時間tlim=26.3Myrに合わせた。(AMRと回転をOFF)Bz=3μGの磁場はTest29と同じ。
 
-ATHENA=$HOME/athena-project
-WORK=/work/beta/aida
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+WORK="${WORK_DIR:-/work/beta/aida}"
+OUTDIR="${OUTPUT_DIR:-${WORK}/results/Toyouchi-test30}"  #毎回変更
+INPUT="${INPUT_FILE:-${ATHENA}/inputs/hydro/Toyouchi_test/athinput.Toyouchi_22}"  #毎回変更
+NPROC="${NPROC:-8}"  #MPI並列計算のコア数
 
-OUTDIR=$WORK/results/Toyouchi-test30
-mkdir -p $OUTDIR
-cd $OUTDIR
+if [[ ! "${NPROC}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: NPROC must be a positive integer: ${NPROC}" >&2
+  exit 2
+fi
+
+if [[ ! -x "${ATHENA}/bin/athena" ]]; then
+  echo "ERROR: MPI executable not found or not executable: ${ATHENA}/bin/athena" >&2
+  exit 2
+fi
+
+if [[ ! -r "${INPUT}" ]]; then
+  echo "ERROR: input file is not readable: ${INPUT}" >&2
+  exit 2
+fi
+
+mkdir -p "${OUTDIR}"
+cd "${OUTDIR}"
+
+RUN_NAME="$(basename "$0" .sh)"
+RUN_LOG="${RUN_LOG:-${OUTDIR}/${RUN_NAME}.$(date +%Y%m%d-%H%M%S).log}"
 
 # 実行（ファイル名はinputに任せる）
 # 環境作成中のテスト計算用入力ファイルはToyouchi_testディレクトリに格納
 # 並列計算のコア数は-np32のように指定する
 unset DISPLAY  #GUIを使わない
-mpirun --use-hwthread-cpus -np 8 "$ATHENA/bin/athena" \
-    -i "$ATHENA/inputs/hydro/Toyouchi_test/athinput.Toyouchi_22"
+
+{
+  echo "start_time = $(date --iso-8601=seconds)"
+  echo "executable = ${ATHENA}/bin/athena"
+  echo "input      = ${INPUT}"
+  echo "output_dir = ${OUTDIR}"
+  echo "mpi_ranks  = ${NPROC}"
+  echo "log_file   = ${RUN_LOG}"
+} | tee -a "${RUN_LOG}"
+
+# "$@" に Athena++ の上書き引数（例: time/nlim=10）を渡せる。
+# PIPESTATUS[0] を使い、tee ではなく mpirun 本体の終了コードを返す。
+set +e
+mpirun --use-hwthread-cpus -np "${NPROC}" "${ATHENA}/bin/athena" \
+  -i "${INPUT}" "$@" 2>&1 | tee -a "${RUN_LOG}"
+status=${PIPESTATUS[0]}
+set -e
+
+echo "end_time   = $(date --iso-8601=seconds)" | tee -a "${RUN_LOG}"
+echo "exit_code  = ${status}" | tee -a "${RUN_LOG}"
+
+if (( status != 0 )); then
+  echo "ERROR: Athena++/MPI terminated abnormally. See ${RUN_LOG}" >&2
+fi
+
+exit "${status}"
 
   #Problem generator:            Toyouchi
   #Coordinate system:            cartesian
@@ -48,5 +95,4 @@ mpirun --use-hwthread-cpus -np 8 "$ATHENA/bin/athena" \
   #HDF5 output:                  OFF
   #Compiler:                     g++
   #Compilation command:          g++  -O3 -std=c++11
-
 
