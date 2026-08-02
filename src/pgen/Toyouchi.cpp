@@ -392,17 +392,18 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         vx += -vphi_eff * y * inv_r;
         vy +=  vphi_eff * x * inv_r;
 
-        // --- radial inflow ---
+        // --- spherical radial inflow toward the origin ---
         if (vr0 != 0.0) {
             Real vr_eff = vr0;
-
-            if (r_cyl < r_cut) {
-                vr_eff *= r_cyl / r_cut;
+            // 原点近傍で速度を滑らかに0へ落とす
+            if (r_sph < r_cut) {
+                vr_eff *= r_sph / r_cut;
             }
 
-            Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
-            vx += vr_eff * x * inv_r;
-            vy += vr_eff * y * inv_r;
+            const Real inv_r_sph = 1.0 / r_sph_safe;
+            vx += vr_eff * x * inv_r_sph;
+            vy += vr_eff * y * inv_r_sph;
+            vz += vr_eff * z * inv_r_sph;
         }
 
         // シンク領域内部の速度をゼロにする
