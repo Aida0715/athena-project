@@ -16,9 +16,13 @@ variable   = prim,gr_nfw,gr_star       # variables to be output
 dt         = 10        # time increment between outputs
 ghost_zones= false
 
+<output3>
+file_type  = rst     # 計算途中の状態を保存するファイル。途中でクラッシュした場合、このファイルの情報をもとに壊れる直前から再開できる。
+dt         = 10     # time increment between outputs
+
 <time>
 cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim       = -1      # cycle limit for short tests
+nlim       = -1      # cycle limit for short tests ※-1はサイクルリミットの上限なし
 tlim       = 1000         # time limit
 integrator  = vl2       # time integration algorithm
 xorder      = 2         # order of spatial reconstruction
