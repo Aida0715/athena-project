@@ -3,14 +3,14 @@
 set -Eeuo pipefail
 
 # commit: cd2fe2c //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# Toyouchi+23の設定に磁場Bz=1μGを入れてテスト
+# Toyouchi+23の設定で回転させ、１Myr計算。磁場BzはOFF
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 WORK="${WORK_DIR:-/work/beta/aida}"
 OUTDIR="${OUTPUT_DIR:-${WORK}/results/Toyouchi-test34}"  #毎回変更
 INPUT="${INPUT_FILE:-${ATHENA}/inputs/hydro/Toyouchi_test/athinput.Toyouchi_26}"  #毎回変更
-NPROC="${NPROC:-8}"  #MPI並列計算のコア数
+NPROC="${NPROC:-16}"  #MPI並列計算のコア数の上限
 
 if [[ ! "${NPROC}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: NPROC must be a positive integer: ${NPROC}" >&2
