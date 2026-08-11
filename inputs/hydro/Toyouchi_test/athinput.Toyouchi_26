@@ -54,9 +54,9 @@ derefine_count = 10
 
 
 <meshblock>
-nx1        = 32
-nx2        = 32
-nx3        = 32
+nx1        = 16
+nx2        = 16
+nx3        = 16
 
 <hydro>
 gamma           = 1.001            # gamma = C_p/C_v ~等温
