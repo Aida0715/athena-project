@@ -181,19 +181,27 @@ AthenaArray<T>::~AthenaArray() {
 // copy constructor (does a deep copy)
 
 template<typename T>
-__attribute__((nothrow)) AthenaArray<T>::AthenaArray(const AthenaArray<T>& src) {
-  nx1_ = src.nx1_;
-  nx2_ = src.nx2_;
-  nx3_ = src.nx3_;
-  nx4_ = src.nx4_;
-  nx5_ = src.nx5_;
-  nx6_ = src.nx6_;
+__attribute__((nothrow))
+AthenaArray<T>::AthenaArray(const AthenaArray<T>& src)
+    : pdata_(nullptr),
+      nx1_(src.nx1_),
+      nx2_(src.nx2_),
+      nx3_(src.nx3_),
+      nx4_(src.nx4_),
+      nx5_(src.nx5_),
+      nx6_(src.nx6_),
+      state_(DataStatus::empty) {
   if (src.pdata_) {
-    std::size_t size = (src.nx1_)*(src.nx2_)*(src.nx3_)*(src.nx4_)*(src.nx5_)*(src.nx6_);
-    pdata_ = new T[size]; // allocate memory for array data
-    for (std::size_t i=0; i<size; ++i) {
-      pdata_[i] = src.pdata_[i]; // copy data (not just addresses!) into new memory
+    std::size_t size =
+        (src.nx1_)*(src.nx2_)*(src.nx3_)*
+        (src.nx4_)*(src.nx5_)*(src.nx6_);
+
+    pdata_ = new T[size];
+
+    for (std::size_t i = 0; i < size; ++i) {
+      pdata_[i] = src.pdata_[i];
     }
+
     state_ = DataStatus::allocated;
   }
 }
@@ -223,30 +231,24 @@ AthenaArray<T> &AthenaArray<T>::operator= (const AthenaArray<T> &src) {
 
 // move constructor
 template<typename T>
-__attribute__((nothrow)) AthenaArray<T>::AthenaArray(AthenaArray<T>&& src) {
-  nx1_ = src.nx1_;
-  nx2_ = src.nx2_;
-  nx3_ = src.nx3_;
-  nx4_ = src.nx4_;
-  nx5_ = src.nx5_;
-  nx6_ = src.nx6_;
-  if (src.pdata_) {
-    // && (src.state_ != DataStatus::allocated){  // (if forbidden to move shallow slices)
-    //  ---- >state_ = DataStatus::allocated;
-
-    // Allowing src shallow-sliced AthenaArray to serve as move constructor argument
-    state_ = src.state_;
-    pdata_ = src.pdata_;
-    // remove ownership of data from src to prevent it from free'ing the resources
-    src.pdata_ = nullptr;
-    src.state_ = DataStatus::empty;
-    src.nx1_ = 0;
-    src.nx2_ = 0;
-    src.nx3_ = 0;
-    src.nx4_ = 0;
-    src.nx5_ = 0;
-    src.nx6_ = 0;
-  }
+__attribute__((nothrow))
+AthenaArray<T>::AthenaArray(AthenaArray<T>&& src)
+    : pdata_(src.pdata_),
+      nx1_(src.nx1_),
+      nx2_(src.nx2_),
+      nx3_(src.nx3_),
+      nx4_(src.nx4_),
+      nx5_(src.nx5_),
+      nx6_(src.nx6_),
+      state_(src.state_) {
+  src.pdata_ = nullptr;
+  src.nx1_ = 0;
+  src.nx2_ = 0;
+  src.nx3_ = 0;
+  src.nx4_ = 0;
+  src.nx5_ = 0;
+  src.nx6_ = 0;
+  src.state_ = DataStatus::empty;
 }
 
 // move assignment operator
