@@ -108,6 +108,10 @@ Real r_sink = 0.0;
 // シンク内部に残す密度フロア
 Real sink_rho_floor = 1.0e-8;
 
+// sink内部で許容するAlfven速度の上限 [code velocity]
+// <= 0 の場合はAlfven速度制限を使用しない
+Real sink_va_cap = 10.0;
+
 // シンク表面の外側で逆流を抑制する幅
 // 各セルで sink_no_outflow_cells * dx として使用
 Real sink_no_outflow_cells = 1.0;
@@ -115,10 +119,35 @@ Real sink_no_outflow_cells = 1.0;
 // AMRで強制的に細分化するシンク外側の幅
 Real sink_refine_buffer = 1.0;
 
-// 診断量を格納する添字
+// ===== sink diagnostic data =====
+//
+// ruser_mesh_data[0]に保存する量。
+// restartファイルにも保存される。
+//
 enum SinkDataIndex {
-  SINK_MSTAR = 0, // 現在の中心星質量
-  SINK_MDOT  = 1  // 直前のタイムステップの降着率
+  // 中心星の累積質量 [code mass]
+  SINK_MSTAR = 0,
+
+  // sink境界を内向きに通過した正味質量流入率
+  // [code mass / code time]
+  SINK_MDOT_FLUX = 1,
+
+  // 現在の1 cycleでsink内部セルから除去した質量率
+  // 中心星質量には加えない診断量
+  // [code mass / code time]
+  SINK_MDOT_RESET = 2,
+
+  // Alfven速度floorにより人工的に追加した質量率
+  // 中心星質量には加えない診断量
+  // [code mass / code time]
+  SINK_MDOT_FLOOR = 3,
+
+  // sink内部に現在存在するガス質量
+  // 人工的なatmosphere質量を含む [code mass]
+  SINK_MGAS = 4,
+
+  // 配列要素数
+  NSINK_DATA = 5
 };
 
 // ===== magnetic field =====
@@ -147,6 +176,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   sink_rho_floor =
       pin->GetOrAddReal("problem", "sink_rho_floor", 1.0e-8);
 
+  // sink内部のAlfven速度上限 [code velocity]
+  // vA = |B|/sqrt(rho) <= sink_va_cap となるように数値的密度floorを調整する。
+  // 0以下なら磁場依存のdensity floorを使用しない。
+  sink_va_cap =
+      pin->GetOrAddReal("problem", "sink_va_cap", 10.0);
+
   // シンク表面で外向き流を禁止するセル数
   sink_no_outflow_cells =
       pin->GetOrAddReal("problem", "sink_no_outflow_cells", 1.0);
@@ -164,14 +199,68 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // restartファイルへ保存されるMeshデータ
   // Athena++のrestart読み込みでは、この初期値はrestartファイル中の値で上書きされる。したがって再スタート時にも成長後の中心星質量を引き継げる
   AllocateRealUserMeshDataField(1);
-  ruser_mesh_data[0].NewAthenaArray(2);
+  ruser_mesh_data[0].NewAthenaArray(NSINK_DATA);
+
+  // 中心星質量 [code mass]
   ruser_mesh_data[0](SINK_MSTAR) = mstar_init;
-  ruser_mesh_data[0](SINK_MDOT)  = 0.0;
+
+  // sink境界の正味質量流入率 [code mass / code time]
+  ruser_mesh_data[0](SINK_MDOT_FLUX) = 0.0;
+
+  // sink内部セルのリセットで除去した質量率
+  // [code mass / code time]
+  ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
+
+  // Alfven速度floorで人工的に追加した質量率
+  // [code mass / code time]
+  ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
+
+  // sink内部に残るガス質量 [code mass]
+  ruser_mesh_data[0](SINK_MGAS) = 0.0;
 
   // 履歴出力を登録する
-  AllocateUserHistoryOutput(2);
-  EnrollUserHistoryOutput(0, SinkHistory, "Mstar");
-  EnrollUserHistoryOutput(1, SinkHistory, "Mdot_sink");
+  // sink診断量をhstへ出力する
+  AllocateUserHistoryOutput(5);
+
+  // 中心星の累積質量 [code mass]
+  EnrollUserHistoryOutput(
+      0,
+      SinkHistory,
+      "Mstar"
+  );
+
+  // sink境界を通過した正味質量流入率
+  // [code mass / code time]
+  EnrollUserHistoryOutput(
+      1,
+      SinkHistory,
+      "Mdot_flux"
+  );
+
+  // sink内部セルをrho_targetへ戻す際に除去した質量率
+  // 中心星質量には加えない
+  // [code mass / code time]
+  EnrollUserHistoryOutput(
+      2,
+      SinkHistory,
+      "Mdot_reset"
+  );
+
+  // Alfven速度floorを満たすため人工的に追加した質量率
+  // [code mass / code time]
+  EnrollUserHistoryOutput(
+      3,
+      SinkHistory,
+      "Mdot_floor"
+  );
+
+  // sink内部に残っているガス質量
+  // [code mass]
+  EnrollUserHistoryOutput(
+      4,
+      SinkHistory,
+      "Msink_gas"
+  );
 
   // 初期設定をログに表示
   if (Globals::my_rank == 0) {
@@ -181,7 +270,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
         << "  r_sink           = " << r_sink << " code units" << std::endl
         << "  r_sink           = " << r_sink_au << " AU" << std::endl
         << "  rho floor        = " << sink_rho_floor << std::endl
-        << "  initial Mstar    = " << mstar_init << " code units"
+        << "  initial Mstar    = " << mstar_init << " code units" << std::endl
+        << "  Alfven speed cap = " << sink_va_cap << " code velocity"
         << std::endl;
   }
 
@@ -587,158 +677,257 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 }
   //  pmy_mesh->tlim=pin->SetReal("time","tlim",TWO_PI/omega*2.0);
 
-  void Mesh::UserWorkInLoop() {
-    if (!use_sink) {
-      ruser_mesh_data[0](SINK_MDOT) = 0.0;
-      return;
+void Mesh::UserWorkInLoop() {
+  if (!use_sink) {
+    ruser_mesh_data[0](SINK_MDOT_FLUX) = 0.0;
+    ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
+    ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
+    ruser_mesh_data[0](SINK_MGAS) = 0.0;
+    return;
+  }
+
+  // NOTE: この境界flux積分は現在使用中のintegrator=vl2を前提とする。
+  // 多段Runge-Kutta法へ変更する場合は、各stageの重み付きfluxを積算する必要がある。
+
+  // sink境界を外側から内側へ通過した正味質量 [code mass]
+  Real flux_mass_local = 0.0;
+
+  // sink内部を目標密度へ戻す際に除去した質量 [code mass]
+  // これは診断量であり、中心星質量には加えない。
+  Real reset_removed_mass_local = 0.0;
+
+  // Alfven速度floorにより人工的に追加した質量 [code mass]
+  Real floor_added_mass_local = 0.0;
+
+  // リセット後にsink内部へ残るガス質量 [code mass]
+  Real sink_gas_mass_local = 0.0;
+
+  const Real x0 = 0.5 * (mesh_size.x1min + mesh_size.x1max);
+  const Real y0 = 0.5 * (mesh_size.x2min + mesh_size.x2max);
+  const Real z0 = 0.5 * (mesh_size.x3min + mesh_size.x3max);
+
+  // --------------------------------------------------------------------------
+  // 1. sink内外をまたぐCartesian faceの数値質量fluxを積分する。
+  // sink内部セル側から各faceを一度だけ数え、二重計数を避ける。
+  // phydro->flux[dir](IDN,...)は単位面積・単位時間当たりの質量flux。
+  // --------------------------------------------------------------------------
+  for (int n = 0; n < nblocal; ++n) {
+    MeshBlock *pmb = my_blocks(n);
+    Coordinates *pcoord = pmb->pcoord;
+    AthenaArray<Real> &x1flux = pmb->phydro->flux[X1DIR];
+    AthenaArray<Real> &x2flux = pmb->phydro->flux[X2DIR];
+    AthenaArray<Real> &x3flux = pmb->phydro->flux[X3DIR];
+
+    for (int k = pmb->ks; k <= pmb->ke; ++k) {
+      for (int j = pmb->js; j <= pmb->je; ++j) {
+        for (int i = pmb->is; i <= pmb->ie; ++i) {
+          const Real x = pcoord->x1v(i) - x0;
+          const Real y = pcoord->x2v(j) - y0;
+          const Real z = pcoord->x3v(k) - z0;
+          const Real r = std::sqrt(x*x + y*y + z*z);
+
+          if (r >= r_sink) {
+            continue;
+          }
+
+          // x1負側: +x1向きfluxがsinkへ入るので正。
+          const Real xm = pcoord->x1v(i-1) - x0;
+          if (std::sqrt(xm*xm + y*y + z*z) >= r_sink) {
+            flux_mass_local += x1flux(IDN,k,j,i)
+                * pcoord->GetFace1Area(k,j,i) * dt;
+          }
+
+          // x1正側: -x1向きfluxがsinkへ入るので符号を反転。
+          const Real xp = pcoord->x1v(i+1) - x0;
+          if (std::sqrt(xp*xp + y*y + z*z) >= r_sink) {
+            flux_mass_local -= x1flux(IDN,k,j,i+1)
+                * pcoord->GetFace1Area(k,j,i+1) * dt;
+          }
+
+          // x2負側: +x2向きfluxがsinkへ入るので正。
+          const Real ym = pcoord->x2v(j-1) - y0;
+          if (std::sqrt(x*x + ym*ym + z*z) >= r_sink) {
+            flux_mass_local += x2flux(IDN,k,j,i)
+                * pcoord->GetFace2Area(k,j,i) * dt;
+          }
+
+          // x2正側: -x2向きfluxがsinkへ入るので符号を反転。
+          const Real yp = pcoord->x2v(j+1) - y0;
+          if (std::sqrt(x*x + yp*yp + z*z) >= r_sink) {
+            flux_mass_local -= x2flux(IDN,k,j+1,i)
+                * pcoord->GetFace2Area(k,j+1,i) * dt;
+          }
+
+          // x3負側: +x3向きfluxがsinkへ入るので正。
+          const Real zm = pcoord->x3v(k-1) - z0;
+          if (std::sqrt(x*x + y*y + zm*zm) >= r_sink) {
+            flux_mass_local += x3flux(IDN,k,j,i)
+                * pcoord->GetFace3Area(k,j,i) * dt;
+          }
+
+          // x3正側: -x3向きfluxがsinkへ入るので符号を反転。
+          const Real zp = pcoord->x3v(k+1) - z0;
+          if (std::sqrt(x*x + y*y + zp*zp) >= r_sink) {
+            flux_mass_local -= x3flux(IDN,k+1,j,i)
+                * pcoord->GetFace3Area(k+1,j,i) * dt;
+          }
+        }
+      }
     }
-  
-    Real removed_mass_local = 0.0;
-  
-    const Real x0 = 0.5 * (mesh_size.x1min + mesh_size.x1max);
-    const Real y0 = 0.5 * (mesh_size.x2min + mesh_size.x2max);
-    const Real z0 = 0.5 * (mesh_size.x3min + mesh_size.x3max);
-  
-    // このMPIランクが所有する全MeshBlockを処理する
-    for (int n = 0; n < nblocal; ++n) {
-      MeshBlock *pmb = my_blocks(n);
-  
-      AthenaArray<Real> &u = pmb->phydro->u;
-      AthenaArray<Real> &w = pmb->phydro->w;
-  
-      for (int k = pmb->ks; k <= pmb->ke; ++k) {
-        for (int j = pmb->js; j <= pmb->je; ++j) {
-          for (int i = pmb->is; i <= pmb->ie; ++i) {
-            const Real x = pmb->pcoord->x1v(i) - x0;
-            const Real y = pmb->pcoord->x2v(j) - y0;
-            const Real z = pmb->pcoord->x3v(k) - z0;
-  
-            const Real r = std::sqrt(x*x + y*y + z*z);
-  
-            const Real dx = std::min({
-                pmb->pcoord->dx1v(i),
-                pmb->pcoord->dx2v(j),
-                pmb->pcoord->dx3v(k)
-            });
-  
-            // ============================================================
-            // 1. シンク内部：ガスを密度フロアまで吸収
-            // ============================================================
-            if (r < r_sink) {
-              const Real rho_old = u(IDN,k,j,i);
-              const Real rho_new = sink_rho_floor;
-  
-              if (rho_old > rho_new) {
-                const Real cell_volume =
-                    pmb->pcoord->GetCellVolume(k,j,i);
-  
-                removed_mass_local +=
-                    (rho_old - rho_new) * cell_volume;
-              }
-  
-              // isothermal EOSなのでエネルギー変数はない
-              u(IDN,k,j,i) = rho_new;
-              u(IM1,k,j,i) = 0.0;
-              u(IM2,k,j,i) = 0.0;
-              u(IM3,k,j,i) = 0.0;
-  
-              // Conserved変数だけでなくPrimitive変数も更新する
-              w(IDN,k,j,i) = rho_new;
-              w(IVX,k,j,i) = 0.0;
-              w(IVY,k,j,i) = 0.0;
-              w(IVZ,k,j,i) = 0.0;
-  
-              continue;
+  }
+
+  // --------------------------------------------------------------------------
+  // 2. sink内部を数値的な目標状態へ戻す。
+  // 磁場は変更せず、密度だけを上げてvA=|B|/sqrt(rho)を制限する。
+  // --------------------------------------------------------------------------
+  for (int n = 0; n < nblocal; ++n) {
+    MeshBlock *pmb = my_blocks(n);
+    AthenaArray<Real> &u = pmb->phydro->u;
+    AthenaArray<Real> &w = pmb->phydro->w;
+#if MAGNETIC_FIELDS_ENABLED
+    // face-centered磁場から作られたcell-centered磁場 [code magnetic field]
+    // density floorの評価にだけ使い、磁場自体は変更しない。
+    AthenaArray<Real> &bcc = pmb->pfield->bcc;
+#endif
+
+    for (int k = pmb->ks; k <= pmb->ke; ++k) {
+      for (int j = pmb->js; j <= pmb->je; ++j) {
+        for (int i = pmb->is; i <= pmb->ie; ++i) {
+          const Real x = pmb->pcoord->x1v(i) - x0;
+          const Real y = pmb->pcoord->x2v(j) - y0;
+          const Real z = pmb->pcoord->x3v(k) - z0;
+          const Real r = std::sqrt(x*x + y*y + z*z);
+          const Real dx = std::min({pmb->pcoord->dx1v(i),
+                                    pmb->pcoord->dx2v(j),
+                                    pmb->pcoord->dx3v(k)});
+
+          if (r < r_sink) {
+            const Real rho_old = u(IDN,k,j,i);  // リセット前密度 [code density]
+            Real rho_target = sink_rho_floor;   // sinkに残す密度 [code density]
+
+#if MAGNETIC_FIELDS_ENABLED
+            if (sink_va_cap > 0.0) {
+              const Real bx = bcc(IB1,k,j,i);  // cell-centered Bx
+              const Real by = bcc(IB2,k,j,i);  // cell-centered By
+              const Real bz = bcc(IB3,k,j,i);  // cell-centered Bz
+              const Real b2 = bx*bx + by*by + bz*bz;  // |B|^2
+
+              // vA=|B|/sqrt(rho)<=sink_va_capに必要な最低密度 [code density]
+              const Real rho_va_floor = b2/SQR(sink_va_cap);
+              rho_target = std::max(rho_target, rho_va_floor);
             }
-  
-            // ============================================================
-            // 2. シンク表面の外側：外向き速度成分を禁止
-            // ============================================================
-            const Real shell_outer =
-                r_sink + sink_no_outflow_cells * dx;
-  
-            if (r < shell_outer && r > 0.0) {
-              const Real inv_r = 1.0 / r;
-  
-              const Real vx = w(IVX,k,j,i);
-              const Real vy = w(IVY,k,j,i);
-              const Real vz = w(IVZ,k,j,i);
-  
-              const Real vr =
-                  (vx*x + vy*y + vz*z) * inv_r;
-  
-              // vr > 0 はシンク中心から外向き
-              if (vr > 0.0) {
-                const Real vx_new = vx - vr*x*inv_r;
-                const Real vy_new = vy - vr*y*inv_r;
-                const Real vz_new = vz - vr*z*inv_r;
-  
-                w(IVX,k,j,i) = vx_new;
-                w(IVY,k,j,i) = vy_new;
-                w(IVZ,k,j,i) = vz_new;
-  
-                const Real rho = u(IDN,k,j,i);
-  
-                u(IM1,k,j,i) = rho * vx_new;
-                u(IM2,k,j,i) = rho * vy_new;
-                u(IM3,k,j,i) = rho * vz_new;
-              }
+#endif
+
+            const Real cell_volume = pmb->pcoord->GetCellVolume(k,j,i);
+            if (rho_old > rho_target) {
+              reset_removed_mass_local += (rho_old-rho_target)*cell_volume;
+            } else if (rho_old < rho_target) {
+              floor_added_mass_local += (rho_target-rho_old)*cell_volume;
+            }
+
+            // isothermal EOSなのでエネルギー変数はない。
+            u(IDN,k,j,i) = rho_target;
+            u(IM1,k,j,i) = 0.0;
+            u(IM2,k,j,i) = 0.0;
+            u(IM3,k,j,i) = 0.0;
+            w(IDN,k,j,i) = rho_target;
+            w(IVX,k,j,i) = 0.0;
+            w(IVY,k,j,i) = 0.0;
+            w(IVZ,k,j,i) = 0.0;
+
+            sink_gas_mass_local += rho_target*cell_volume;
+            continue;
+          }
+
+          // sink表面外側で、sink中心から外向きの速度成分だけを除去する。
+          const Real shell_outer = r_sink + sink_no_outflow_cells*dx;
+          if (r < shell_outer && r > 0.0) {
+            const Real inv_r = 1.0/r;
+            const Real vx = w(IVX,k,j,i);
+            const Real vy = w(IVY,k,j,i);
+            const Real vz = w(IVZ,k,j,i);
+            const Real vr = (vx*x + vy*y + vz*z)*inv_r;  // 動径速度
+
+            if (vr > 0.0) {
+              const Real vx_new = vx-vr*x*inv_r;
+              const Real vy_new = vy-vr*y*inv_r;
+              const Real vz_new = vz-vr*z*inv_r;
+              w(IVX,k,j,i) = vx_new;
+              w(IVY,k,j,i) = vy_new;
+              w(IVZ,k,j,i) = vz_new;
+              const Real rho = u(IDN,k,j,i);
+              u(IM1,k,j,i) = rho*vx_new;
+              u(IM2,k,j,i) = rho*vy_new;
+              u(IM3,k,j,i) = rho*vz_new;
             }
           }
         }
       }
     }
-  
-    // 全MPIランクの除去質量を合算する
-    Real removed_mass_global = removed_mass_local;
-  
-  #ifdef MPI_PARALLEL
-    MPI_Allreduce(MPI_IN_PLACE, &removed_mass_global, 1,
-                  MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
-  #endif
-  
-    // 中心星質量を更新
-    ruser_mesh_data[0](SINK_MSTAR) += removed_mass_global;
-  
-    // コード単位での瞬間降着率
-    if (dt > 0.0) {
-      ruser_mesh_data[0](SINK_MDOT) =
-          removed_mass_global / dt;
-    } else {
-      ruser_mesh_data[0](SINK_MDOT) = 0.0;
-    }
-  
-    if (Globals::my_rank == 0
-        && ncycle_out > 0
-        && ncycle % ncycle_out == 0) {
-      std::cout
-          << "Sink: Mstar = "
-          << ruser_mesh_data[0](SINK_MSTAR)
-          << ", Mdot = "
-          << ruser_mesh_data[0](SINK_MDOT)
-          << ", dM = "
-          << removed_mass_global
-          << std::endl;
-    }
   }
 
-// hst出力関数を追加する（hstにはコード単位で、Mstar、Mdot_sinkが追加される）
+  // 全MPI rankで、flux・cell reset・floor・sink gas massを合算する。
+  Real sink_data[4] = {flux_mass_local, reset_removed_mass_local,
+                       floor_added_mass_local, sink_gas_mass_local};
+#ifdef MPI_PARALLEL
+  MPI_Allreduce(MPI_IN_PLACE, sink_data, 4, MPI_ATHENA_REAL, MPI_SUM,
+                MPI_COMM_WORLD);
+#endif
+
+  const Real flux_mass_global = sink_data[0];
+  const Real reset_removed_mass_global = sink_data[1];
+  const Real floor_added_mass_global = sink_data[2];
+  const Real sink_gas_mass_global = sink_data[3];
+
+  // 中心星質量はsink境界からの正味流入だけで更新する。
+  // 微小な外向き正味fluxで中心星質量が減らないよう0で下限を取る。
+  const Real accreted_mass = std::max(flux_mass_global, static_cast<Real>(0.0));
+  ruser_mesh_data[0](SINK_MSTAR) += accreted_mass;
+
+  if (dt > 0.0) {
+    ruser_mesh_data[0](SINK_MDOT_FLUX) = accreted_mass/dt;
+    ruser_mesh_data[0](SINK_MDOT_RESET) = reset_removed_mass_global/dt;
+    ruser_mesh_data[0](SINK_MDOT_FLOOR) = floor_added_mass_global/dt;
+  } else {
+    ruser_mesh_data[0](SINK_MDOT_FLUX) = 0.0;
+    ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
+    ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
+  }
+  ruser_mesh_data[0](SINK_MGAS) = sink_gas_mass_global;
+
+  if (Globals::my_rank == 0 && ncycle_out > 0 && ncycle % ncycle_out == 0) {
+    std::cout << "Sink: Mstar=" << ruser_mesh_data[0](SINK_MSTAR)
+              << " Mdot_flux=" << ruser_mesh_data[0](SINK_MDOT_FLUX)
+              << " dM_flux=" << accreted_mass
+              << " Mdot_reset=" << ruser_mesh_data[0](SINK_MDOT_RESET)
+              << " Mdot_floor=" << ruser_mesh_data[0](SINK_MDOT_FLOOR)
+              << " Msink_gas=" << ruser_mesh_data[0](SINK_MGAS)
+              << std::endl;
+  }
+}
+
+// hstへsink関連の大域物理量・数値診断量を出力する。
 Real SinkHistory(MeshBlock *pmb, int iout) {
-  // History出力は全MeshBlockについて和を取る。
-  // 同じMstarを全ブロックから返すとブロック数倍になるため、
-  // gid == 0 のブロックだけが値を返す。
+  // Historyは全MeshBlockの返り値を加算するため、大域量はgid=0だけから返す。
   if (pmb->gid != 0) {
     return 0.0;
   }
 
   if (iout == 0) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MSTAR);
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MSTAR);       // [code mass]
   }
-
   if (iout == 1) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT);
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_FLUX);  // [mass/time]
   }
-
+  if (iout == 2) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_RESET); // [mass/time]
+  }
+  if (iout == 3) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_FLOOR); // [mass/time]
+  }
+  if (iout == 4) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MGAS);       // [code mass]
+  }
   return 0.0;
 }
 
