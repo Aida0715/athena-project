@@ -146,8 +146,28 @@ enum SinkDataIndex {
   // 人工的なatmosphere質量を含む [code mass]
   SINK_MGAS = 4,
 
+  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  SINK_MFLUX_CUM = 5,
+
+  // sink内部resetで除去した累積質量 [code mass]
+  // 中心星質量には加えない診断量
+  SINK_MRESET_CUM = 6,
+
+  // density floorで人工的に追加した累積質量 [code mass]
+  // 通常floorとAlfven速度floorの両方を含む
+  SINK_MFLOOR_CUM = 7,
+
+  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
+  SINK_MMAGFLOOR = 8,
+
+  // sink内部の最大Alfven速度 [code velocity]
+  SINK_VA_MAX = 9,
+
+  // sink内部の最大磁場強度 [code magnetic field]
+  SINK_B_MAX = 10,
+
   // 配列要素数
-  NSINK_DATA = 5
+  NSINK_DATA = 11
 };
 
 // ===== magnetic field =====
@@ -218,9 +238,27 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // sink内部に残るガス質量 [code mass]
   ruser_mesh_data[0](SINK_MGAS) = 0.0;
 
+  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  ruser_mesh_data[0](SINK_MFLUX_CUM) = 0.0;
+
+  // sink内部resetで除去した累積質量 [code mass]
+  ruser_mesh_data[0](SINK_MRESET_CUM) = 0.0;
+
+  // density floorで人工的に追加した累積質量 [code mass]
+  ruser_mesh_data[0](SINK_MFLOOR_CUM) = 0.0;
+
+  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
+  ruser_mesh_data[0](SINK_MMAGFLOOR) = 0.0;
+
+  // sink内部の最大Alfven速度 [code velocity]
+  ruser_mesh_data[0](SINK_VA_MAX) = 0.0;
+
+  // sink内部の最大磁場強度 [code magnetic field]
+  ruser_mesh_data[0](SINK_B_MAX) = 0.0;
+
   // 履歴出力を登録する
   // sink診断量をhstへ出力する
-  AllocateUserHistoryOutput(5);
+  AllocateUserHistoryOutput(NSINK_DATA);
 
   // 中心星の累積質量 [code mass]
   EnrollUserHistoryOutput(
@@ -261,6 +299,24 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       SinkHistory,
       "Msink_gas"
   );
+
+  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  EnrollUserHistoryOutput(5, SinkHistory, "Mflux_cum");
+
+  // sink内部resetで除去した累積質量 [code mass]
+  EnrollUserHistoryOutput(6, SinkHistory, "Mreset_cum");
+
+  // density floorで人工的に追加した累積質量 [code mass]
+  EnrollUserHistoryOutput(7, SinkHistory, "Mfloor_cum");
+
+  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
+  EnrollUserHistoryOutput(8, SinkHistory, "Msink_magfloor");
+
+  // sink内部の最大Alfven速度 [code velocity]
+  EnrollUserHistoryOutput(9, SinkHistory, "Va_max_sink");
+
+  // sink内部の最大磁場強度 [code magnetic field]
+  EnrollUserHistoryOutput(10, SinkHistory, "Bmax_sink");
 
   // 初期設定をログに表示
   if (Globals::my_rank == 0) {
@@ -400,9 +456,20 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 //========================================================================================
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
-  AllocateUserOutputVariables(2);
-  SetUserOutputVariableName(0, "gr_star");
-  SetUserOutputVariableName(1, "gr_nfw");
+  // 中心星・NFWの動径加速度に加え、力の釣り合いを解析するための
+  // 自己重力・圧力勾配・Lorentz加速度のCartesian 3成分を出力する。
+  AllocateUserOutputVariables(11);
+  SetUserOutputVariableName(0, "gr_star");  // 中心星の動径重力加速度
+  SetUserOutputVariableName(1, "gr_nfw");   // NFW haloの動径重力加速度
+  SetUserOutputVariableName(2, "gself_x");  // 自己重力加速度x成分
+  SetUserOutputVariableName(3, "gself_y");  // 自己重力加速度y成分
+  SetUserOutputVariableName(4, "gself_z");  // 自己重力加速度z成分
+  SetUserOutputVariableName(5, "apres_x");  // 圧力勾配加速度x成分
+  SetUserOutputVariableName(6, "apres_y");  // 圧力勾配加速度y成分
+  SetUserOutputVariableName(7, "apres_z");  // 圧力勾配加速度z成分
+  SetUserOutputVariableName(8, "amag_x");   // Lorentz加速度x成分
+  SetUserOutputVariableName(9, "amag_y");   // Lorentz加速度y成分
+  SetUserOutputVariableName(10, "amag_z");  // Lorentz加速度z成分
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
@@ -452,8 +519,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         phydro->u(IDN,k,j,i) = rho_final;
 
-	user_out_var(0,k,j,i) = 0.0;   // star
-	user_out_var(1,k,j,i) = 0.0;   // nfw
+        // user output variablesを初期化する。
+        // 力の診断量はUserWorkBeforeOutput()で出力直前に更新する。
+        for (int n = 0; n < 11; ++n) {
+          user_out_var(n,k,j,i) = 0.0;
+        }
 
         // 追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
@@ -675,6 +745,90 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
     }
   }
 }
+
+// VTK出力直前に、力の釣り合いを調べるための診断加速度を計算する。
+// これらはcell-centered量の2次中心差分であり、Riemann solverが用いる
+// 離散fluxそのものではない。特にAMR境界・sink境界では微分誤差に注意する。
+void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
+  AthenaArray<Real> &w = phydro->w;
+  Coordinates *coord = pcoord;
+
+  for (int k = ks; k <= ke; ++k) {
+    for (int j = js; j <= je; ++j) {
+      for (int i = is; i <= ie; ++i) {
+        // 隣接セル中心間の距離 [code length]
+        const Real dx = coord->x1v(i+1) - coord->x1v(i-1);
+        const Real dy = coord->x2v(j+1) - coord->x2v(j-1);
+        const Real dz = coord->x3v(k+1) - coord->x3v(k-1);
+        const Real rho = std::max(w(IDN,k,j,i), static_cast<Real>(1.0e-300));
+
+        // 自己重力加速度 g_self=-grad(Phi_self) [code acceleration]
+        Real gself_x = 0.0;
+        Real gself_y = 0.0;
+        Real gself_z = 0.0;
+        if (SELF_GRAVITY_ENABLED) {
+          AthenaArray<Real> &phi = pgrav->phi;
+          gself_x = -(phi(k,j,i+1)-phi(k,j,i-1))/dx;
+          gself_y = -(phi(k,j+1,i)-phi(k,j-1,i))/dy;
+          gself_z = -(phi(k+1,j,i)-phi(k-1,j,i))/dz;
+        }
+        user_out_var(2,k,j,i) = gself_x;
+        user_out_var(3,k,j,i) = gself_y;
+        user_out_var(4,k,j,i) = gself_z;
+
+        // 圧力勾配加速度 a_pres=-grad(P)/rho [code acceleration]
+        // 断熱EOSではprimitive pressure、等温EOSではP=cs^2*rhoを使う。
+#if NON_BAROTROPIC_EOS
+        const Real pxm = w(IPR,k,j,i-1);
+        const Real pxp = w(IPR,k,j,i+1);
+        const Real pym = w(IPR,k,j-1,i);
+        const Real pyp = w(IPR,k,j+1,i);
+        const Real pzm = w(IPR,k-1,j,i);
+        const Real pzp = w(IPR,k+1,j,i);
+#else
+        const Real pxm = cs2*w(IDN,k,j,i-1);
+        const Real pxp = cs2*w(IDN,k,j,i+1);
+        const Real pym = cs2*w(IDN,k,j-1,i);
+        const Real pyp = cs2*w(IDN,k,j+1,i);
+        const Real pzm = cs2*w(IDN,k-1,j,i);
+        const Real pzp = cs2*w(IDN,k+1,j,i);
+#endif
+        user_out_var(5,k,j,i) = -((pxp-pxm)/dx)/rho;
+        user_out_var(6,k,j,i) = -((pyp-pym)/dy)/rho;
+        user_out_var(7,k,j,i) = -((pzp-pzm)/dz)/rho;
+
+        // Lorentz加速度 a_mag=[curl(B) x B]/rho [code acceleration]
+        // Athena++の磁場規格化では4*piはBの定義へ吸収されている。
+        Real amag_x = 0.0;
+        Real amag_y = 0.0;
+        Real amag_z = 0.0;
+#if MAGNETIC_FIELDS_ENABLED
+        AthenaArray<Real> &bcc = pfield->bcc;
+        const Real bx = bcc(IB1,k,j,i);
+        const Real by = bcc(IB2,k,j,i);
+        const Real bz = bcc(IB3,k,j,i);
+
+        const Real dbz_dy = (bcc(IB3,k,j+1,i)-bcc(IB3,k,j-1,i))/dy;
+        const Real dby_dz = (bcc(IB2,k+1,j,i)-bcc(IB2,k-1,j,i))/dz;
+        const Real dbx_dz = (bcc(IB1,k+1,j,i)-bcc(IB1,k-1,j,i))/dz;
+        const Real dbz_dx = (bcc(IB3,k,j,i+1)-bcc(IB3,k,j,i-1))/dx;
+        const Real dby_dx = (bcc(IB2,k,j,i+1)-bcc(IB2,k,j,i-1))/dx;
+        const Real dbx_dy = (bcc(IB1,k,j+1,i)-bcc(IB1,k,j-1,i))/dy;
+
+        const Real jx = dbz_dy-dby_dz;
+        const Real jy = dbx_dz-dbz_dx;
+        const Real jz = dby_dx-dbx_dy;
+        amag_x = (jy*bz-jz*by)/rho;
+        amag_y = (jz*bx-jx*bz)/rho;
+        amag_z = (jx*by-jy*bx)/rho;
+#endif
+        user_out_var(8,k,j,i) = amag_x;
+        user_out_var(9,k,j,i) = amag_y;
+        user_out_var(10,k,j,i) = amag_z;
+      }
+    }
+  }
+}
   //  pmy_mesh->tlim=pin->SetReal("time","tlim",TWO_PI/omega*2.0);
 
 void Mesh::UserWorkInLoop() {
@@ -683,6 +837,9 @@ void Mesh::UserWorkInLoop() {
     ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
     ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
     ruser_mesh_data[0](SINK_MGAS) = 0.0;
+    ruser_mesh_data[0](SINK_MMAGFLOOR) = 0.0;
+    ruser_mesh_data[0](SINK_VA_MAX) = 0.0;
+    ruser_mesh_data[0](SINK_B_MAX) = 0.0;
     return;
   }
 
@@ -701,6 +858,15 @@ void Mesh::UserWorkInLoop() {
 
   // リセット後にsink内部へ残るガス質量 [code mass]
   Real sink_gas_mass_local = 0.0;
+
+  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
+  Real magnetic_floor_mass_local = 0.0;
+
+  // sink内部の最大Alfven速度 [code velocity]
+  Real va_max_sink_local = 0.0;
+
+  // sink内部の最大磁場強度 [code magnetic field]
+  Real b_max_sink_local = 0.0;
 
   const Real x0 = 0.5 * (mesh_size.x1min + mesh_size.x1max);
   const Real y0 = 0.5 * (mesh_size.x2min + mesh_size.x2max);
@@ -804,14 +970,15 @@ void Mesh::UserWorkInLoop() {
           if (r < r_sink) {
             const Real rho_old = u(IDN,k,j,i);  // リセット前密度 [code density]
             Real rho_target = sink_rho_floor;   // sinkに残す密度 [code density]
+            Real b2 = 0.0;                      // |B|^2 [code magnetic field^2]
 
 #if MAGNETIC_FIELDS_ENABLED
-            if (sink_va_cap > 0.0) {
-              const Real bx = bcc(IB1,k,j,i);  // cell-centered Bx
-              const Real by = bcc(IB2,k,j,i);  // cell-centered By
-              const Real bz = bcc(IB3,k,j,i);  // cell-centered Bz
-              const Real b2 = bx*bx + by*by + bz*bz;  // |B|^2
+            const Real bx = bcc(IB1,k,j,i);  // cell-centered Bx
+            const Real by = bcc(IB2,k,j,i);  // cell-centered By
+            const Real bz = bcc(IB3,k,j,i);  // cell-centered Bz
+            b2 = bx*bx + by*by + bz*bz;
 
+            if (sink_va_cap > 0.0) {
               // vA=|B|/sqrt(rho)<=sink_va_capに必要な最低密度 [code density]
               const Real rho_va_floor = b2/SQR(sink_va_cap);
               rho_target = std::max(rho_target, rho_va_floor);
@@ -819,6 +986,19 @@ void Mesh::UserWorkInLoop() {
 #endif
 
             const Real cell_volume = pmb->pcoord->GetCellVolume(k,j,i);
+
+#if MAGNETIC_FIELDS_ENABLED
+            const Real bmag = std::sqrt(std::max(b2, static_cast<Real>(0.0)));
+            const Real va_after_reset = bmag/std::sqrt(std::max(
+                rho_target, static_cast<Real>(1.0e-300)));
+            b_max_sink_local = std::max(b_max_sink_local, bmag);
+            va_max_sink_local = std::max(va_max_sink_local, va_after_reset);
+
+            // 通常のsink_rho_floorを超えて磁場依存floorが保持している質量。
+            magnetic_floor_mass_local += std::max(
+                rho_target-sink_rho_floor, static_cast<Real>(0.0))*cell_volume;
+#endif
+
             if (rho_old > rho_target) {
               reset_removed_mass_local += (rho_old-rho_target)*cell_volume;
             } else if (rho_old < rho_target) {
@@ -866,11 +1046,12 @@ void Mesh::UserWorkInLoop() {
     }
   }
 
-  // 全MPI rankで、flux・cell reset・floor・sink gas massを合算する。
-  Real sink_data[4] = {flux_mass_local, reset_removed_mass_local,
-                       floor_added_mass_local, sink_gas_mass_local};
+  // 全MPI rankで、加算可能なsink診断量を合算する。
+  Real sink_data[5] = {flux_mass_local, reset_removed_mass_local,
+                       floor_added_mass_local, sink_gas_mass_local,
+                       magnetic_floor_mass_local};
 #ifdef MPI_PARALLEL
-  MPI_Allreduce(MPI_IN_PLACE, sink_data, 4, MPI_ATHENA_REAL, MPI_SUM,
+  MPI_Allreduce(MPI_IN_PLACE, sink_data, 5, MPI_ATHENA_REAL, MPI_SUM,
                 MPI_COMM_WORLD);
 #endif
 
@@ -878,11 +1059,26 @@ void Mesh::UserWorkInLoop() {
   const Real reset_removed_mass_global = sink_data[1];
   const Real floor_added_mass_global = sink_data[2];
   const Real sink_gas_mass_global = sink_data[3];
+  const Real magnetic_floor_mass_global = sink_data[4];
+
+  // 最大値を取るsink診断量はMPI_MAXで集約する。
+  Real sink_max_data[2] = {va_max_sink_local, b_max_sink_local};
+#ifdef MPI_PARALLEL
+  MPI_Allreduce(MPI_IN_PLACE, sink_max_data, 2, MPI_ATHENA_REAL, MPI_MAX,
+                MPI_COMM_WORLD);
+#endif
+  const Real va_max_sink_global = sink_max_data[0];
+  const Real b_max_sink_global = sink_max_data[1];
 
   // 中心星質量はsink境界からの正味流入だけで更新する。
   // 微小な外向き正味fluxで中心星質量が減らないよう0で下限を取る。
   const Real accreted_mass = std::max(flux_mass_global, static_cast<Real>(0.0));
   ruser_mesh_data[0](SINK_MSTAR) += accreted_mass;
+
+  // 毎cycleの質量変化を直接累積し、疎なHST瞬間値の数値積分誤差を避ける。
+  ruser_mesh_data[0](SINK_MFLUX_CUM) += accreted_mass;
+  ruser_mesh_data[0](SINK_MRESET_CUM) += reset_removed_mass_global;
+  ruser_mesh_data[0](SINK_MFLOOR_CUM) += floor_added_mass_global;
 
   if (dt > 0.0) {
     ruser_mesh_data[0](SINK_MDOT_FLUX) = accreted_mass/dt;
@@ -894,6 +1090,9 @@ void Mesh::UserWorkInLoop() {
     ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
   }
   ruser_mesh_data[0](SINK_MGAS) = sink_gas_mass_global;
+  ruser_mesh_data[0](SINK_MMAGFLOOR) = magnetic_floor_mass_global;
+  ruser_mesh_data[0](SINK_VA_MAX) = va_max_sink_global;
+  ruser_mesh_data[0](SINK_B_MAX) = b_max_sink_global;
 
   if (Globals::my_rank == 0 && ncycle_out > 0 && ncycle % ncycle_out == 0) {
     std::cout << "Sink: Mstar=" << ruser_mesh_data[0](SINK_MSTAR)
@@ -902,6 +1101,9 @@ void Mesh::UserWorkInLoop() {
               << " Mdot_reset=" << ruser_mesh_data[0](SINK_MDOT_RESET)
               << " Mdot_floor=" << ruser_mesh_data[0](SINK_MDOT_FLOOR)
               << " Msink_gas=" << ruser_mesh_data[0](SINK_MGAS)
+              << " Msink_magfloor=" << ruser_mesh_data[0](SINK_MMAGFLOOR)
+              << " Va_max_sink=" << ruser_mesh_data[0](SINK_VA_MAX)
+              << " Bmax_sink=" << ruser_mesh_data[0](SINK_B_MAX)
               << std::endl;
   }
 }
@@ -913,20 +1115,9 @@ Real SinkHistory(MeshBlock *pmb, int iout) {
     return 0.0;
   }
 
-  if (iout == 0) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MSTAR);       // [code mass]
-  }
-  if (iout == 1) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_FLUX);  // [mass/time]
-  }
-  if (iout == 2) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_RESET); // [mass/time]
-  }
-  if (iout == 3) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MDOT_FLOOR); // [mass/time]
-  }
-  if (iout == 4) {
-    return pmb->pmy_mesh->ruser_mesh_data[0](SINK_MGAS);       // [code mass]
+  // History出力番号とSinkDataIndexを一致させている。
+  if (iout >= 0 && iout < NSINK_DATA) {
+    return pmb->pmy_mesh->ruser_mesh_data[0](iout);
   }
   return 0.0;
 }
