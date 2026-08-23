@@ -10,7 +10,7 @@ ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 WORK="${WORK_DIR:-/work/beta/aida}"
 OUTDIR="${OUTPUT_DIR:-${WORK}/results/Toyouchi-test37}"  #毎回変更
 INPUT="${INPUT_FILE:-${ATHENA}/inputs/hydro/Toyouchi_test/athinput.Toyouchi_29}"  #毎回変更
-NPROC="${NPROC:-32}"  #MPI並列計算のコア数
+NPROC="${NPROC:-16}"  #MPI並列計算のコア数
 
 if [[ ! "${NPROC}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: NPROC must be a positive integer: ${NPROC}" >&2
