@@ -84,6 +84,9 @@ sink_refine_buffer_factor = 1.0
 sink_va_cap = 0.0  # sink内部のAlfven速度上限 [code velocity]
                    # 0以下にすると磁場依存density floorを無効化
                    # 物理的根拠を持って決めた値ではない
+sink_cfl_va_cap = 0.0  # CFL評価だけに使うAlfven速度上限
+sink_cfl_cap_radius_factor = 1.0  #CFL処理範囲 1.0ならシンク全体
+sink_cfl_max_relax = 1.0  #物理CFLに対して許す最大タイムステップ拡大率
 
 mstar_init                = 1.0  # 初期中心星質量(code mass = 約2 Msun)
 use_central_gravity = true
