@@ -56,6 +56,9 @@ int RefinementCondition(MeshBlock *pmb); // AMRのリファインメント宣言
 
 Real SinkHistory(MeshBlock *pmb, int iout); // hstファイルへ中心星質量・降着率を出力
 
+Real SinkCFLSignalSpeed(MeshBlock *pmb, int k, int j, int i,
+                        CoordinateDirection dir, Real physical_signal_speed);
+
 namespace {
 // with functions A1,2,3 which compute vector potentials
 Real cs2, gam, gm1, gconst;
@@ -111,6 +114,18 @@ Real sink_rho_floor = 1.0e-8;
 // sink内部で許容するAlfven速度の上限 [code velocity]
 // <= 0 の場合はAlfven速度制限を使用しない
 Real sink_va_cap = 10.0;
+
+// 実験用：sink深部でCFL評価にだけ使用するAlfven速度上限 [code velocity]
+// 実際のMHD flux/Riemann solverの波速は変更しないため、0以下を通常設定とする。
+Real sink_cfl_va_cap = 0.0;
+
+// CFL上限を適用する半径をr_sinkに対する比で指定する。
+// デフォルト1.0ではsink内部の全セルに適用する。
+Real sink_cfl_cap_radius_factor = 1.0;
+
+// 1セルの物理CFLに対して許す最大タイムステップ緩和倍率。
+// 1以下ならCFL違反を許さない。実験時も1.2--1.5程度を推奨。
+Real sink_cfl_max_relax = 1.0;
 
 // シンク表面の外側で逆流を抑制する幅
 // 各セルで sink_no_outflow_cells * dx として使用
@@ -201,6 +216,30 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // 0以下なら磁場依存のdensity floorを使用しない。
   sink_va_cap =
       pin->GetOrAddReal("problem", "sink_va_cap", 10.0);
+
+  // 実験用のCFL限定Alfven速度上限。密度・磁場・MHD fluxは変更しない。
+  sink_cfl_va_cap =
+      pin->GetOrAddReal("problem", "sink_cfl_va_cap", 0.0);
+  sink_cfl_cap_radius_factor = pin->GetOrAddReal(
+      "problem", "sink_cfl_cap_radius_factor", 1.0);
+  sink_cfl_max_relax =
+      pin->GetOrAddReal("problem", "sink_cfl_max_relax", 1.0);
+
+  if (sink_cfl_cap_radius_factor < 0.0
+      || sink_cfl_cap_radius_factor > 1.0) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR: sink_cfl_cap_radius_factor must be in [0,1]"
+        << std::endl;
+    ATHENA_ERROR(msg);
+  }
+  if (sink_cfl_max_relax < 1.0) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR: sink_cfl_max_relax must be >= 1" << std::endl;
+    ATHENA_ERROR(msg);
+  }
+  if (sink_cfl_va_cap > 0.0 && use_sink) {
+    EnrollUserCFLSignalSpeedFunction(SinkCFLSignalSpeed);
+  }
 
   // シンク表面で外向き流を禁止するセル数
   sink_no_outflow_cells =
@@ -328,6 +367,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
         << "  rho floor        = " << sink_rho_floor << std::endl
         << "  initial Mstar    = " << mstar_init << " code units" << std::endl
         << "  Alfven speed cap = " << sink_va_cap << " code velocity"
+        << std::endl
+        << "  EXPERIMENTAL CFL-only Va cap = " << sink_cfl_va_cap
+        << " code velocity" << std::endl
+        << "  CFL-cap radius   = " << sink_cfl_cap_radius_factor
+        << " r_sink" << std::endl
+        << "  max CFL relax    = " << sink_cfl_max_relax
         << std::endl;
   }
 
@@ -448,6 +493,59 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   }
   return;
+}
+
+//========================================================================================
+//! \fn Real SinkCFLSignalSpeed(...)
+//! \brief Experimental sink-interior modifier of the signal speed used by CFL only
+//!
+//! This function does NOT modify rho, pressure, velocity, magnetic field, MHD fluxes,
+//! or the Riemann-solver eigenvalues.  Consequently a returned value smaller than
+//! physical_signal_speed deliberately violates the physical CFL condition.  Restrict
+//! its use to short validation runs.  By default the cap covers all cells whose
+//! centers lie inside r_sink.  A smaller sink_cfl_cap_radius_factor can restore an
+//! outer physical-CFL buffer.  sink_cfl_max_relax limits the violation factor cell
+//! by cell.
+//========================================================================================
+
+Real SinkCFLSignalSpeed(MeshBlock *pmb, int k, int j, int i,
+                        CoordinateDirection dir, Real physical_signal_speed) {
+  if (!use_sink || sink_cfl_va_cap <= 0.0
+      || sink_cfl_cap_radius_factor <= 0.0
+      || sink_cfl_max_relax <= 1.0) {
+    return physical_signal_speed;
+  }
+
+  const Real x0 = 0.5*(pmb->pmy_mesh->mesh_size.x1min
+                     + pmb->pmy_mesh->mesh_size.x1max);
+  const Real y0 = 0.5*(pmb->pmy_mesh->mesh_size.x2min
+                     + pmb->pmy_mesh->mesh_size.x2max);
+  const Real z0 = 0.5*(pmb->pmy_mesh->mesh_size.x3min
+                     + pmb->pmy_mesh->mesh_size.x3max);
+  const Real x = pmb->pcoord->x1v(i) - x0;
+  const Real y = pmb->pcoord->x2v(j) - y0;
+  const Real z = pmb->pcoord->x3v(k) - z0;
+  const Real radius = std::sqrt(x*x + y*y + z*z);
+  const Real cap_radius = sink_cfl_cap_radius_factor*r_sink;
+  if (radius >= cap_radius) return physical_signal_speed;
+
+  // Directional fluid velocity [code velocity].  The capped fast-speed estimate
+  // sqrt(cs^2 + va_cap^2) is conservative with respect to a prescribed Alfven cap.
+  int velocity_index = IVX;
+  if (dir == X2DIR) velocity_index = IVY;
+  if (dir == X3DIR) velocity_index = IVZ;
+  const Real abs_velocity =
+      std::abs(pmb->phydro->w(velocity_index, k, j, i));
+  const Real capped_fast_speed =
+      std::sqrt(std::max(static_cast<Real>(0.0), cs2)
+                + SQR(sink_cfl_va_cap));
+  const Real capped_signal_speed = abs_velocity + capped_fast_speed;
+
+  // Never enlarge the local timestep by more than sink_cfl_max_relax relative
+  // to the physical cell CFL value, even when the requested Va cap is much lower.
+  const Real relaxation_floor = physical_signal_speed/sink_cfl_max_relax;
+  return std::max(relaxation_floor,
+                  std::min(physical_signal_speed, capped_signal_speed));
 }
 
 //========================================================================================
