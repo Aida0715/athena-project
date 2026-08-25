@@ -81,7 +81,7 @@ r_sink_au                 = 1000.0
 sink_rho_floor            = 1.0e-8
 sink_no_outflow_cells     = 1.0
 sink_refine_buffer_factor = 1.0
-sink_va_cap = 10.0  # sink内部のAlfven速度上限 [code velocity]
+sink_va_cap = 10.00  # sink内部のAlfven速度上限 [code velocity]
                    # 0以下にすると磁場依存density floorを無効化
                    # 物理的根拠を持って決めた値ではない
 sink_cfl_va_cap = 0.0  # CFL評価だけに使うAlfven速度上限
