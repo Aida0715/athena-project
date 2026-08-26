@@ -1,0 +1,108 @@
+<comment>
+problem   = Toyouchi test
+reference = 
+configure = --prob=Toyouchi --grav=mg/fft (-fft)
+
+<job>
+problem_id = Toyouchi    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 0.5       # time increment between outputs
+
+<output2>
+file_type  = vtk        # Binary data dump
+variable   = prim,gr_nfw,gr_star,gself_x,gself_y,gself_z,apres_x,apres_y,apres_z,amag_x,amag_y,amag_z       # variables to be output
+dt         = 5        # time increment between outputs
+ghost_zones= false
+
+<output3>
+file_type = rst
+dt        = 10
+
+<time>
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1      # cycle limit for short tests
+tlim       = 50         # time limit
+integrator  = vl2       # time integration algorithm
+xorder      = 2         # order of spatial reconstruction
+ncycle_out  = 1         # interval for stdout summary info
+
+<mesh>
+nx1        = 64         # Number of zones in X1-direction
+x1min      = -224        # minimum value of X1 ~10^5au~10^5au
+x1max      = 224        # maximum value of X1 ~10^5au
+ix1_bc     = outflow   # inner-X1 boundary flag
+ox1_bc     = outflow   # outer-X1 boundary flag
+
+nx2        = 64         # Number of zones in X2-direction
+x2min      = -224        # minimum value of X2 ~10^5au
+x2max      = 224        # maximum value of X2 ~10^5au
+ix2_bc     = outflow   # inner-X2 boundary flag
+ox2_bc     = outflow   # outer-X2 boundary flag
+
+nx3        = 64         # Number of zones in X3-direction
+x3min      = -224        # minimum value of X3 ~10^5au
+x3max      = 224        # maximum value of X3 ~10^5au
+ix3_bc     = outflow   # inner-X3 boundary flag
+ox3_bc     = outflow   # outer-X3 boundary flag
+
+#AMRは完全ON
+refinement = adaptive
+numlevel = 5
+derefine_count = 10  #何回derefine条件を満たしたらderefineするか
+
+
+<meshblock>
+nx1        = 16
+nx2        = 16
+nx3        = 16
+
+<hydro>
+gamma           = 1.001            # gamma = C_p/C_v ~等温
+iso_sound_speed = 1.00           # equivalent to sqrt(kb*T/μ*mH) for T=530K,μ=1.22,mH=1.6735575e-24 cgs→ コード単位に変換済み
+dfloor          = 1.0e-10
+
+<gravity>
+mgmode          = FMG
+threshold       = 0.0
+mporder         = 2
+ix1_bc          = multipole
+ox1_bc          = multipole
+ix2_bc          = multipole
+ox2_bc          = multipole
+ix3_bc          = multipole
+ox3_bc          = multipole
+
+<problem>
+# sink関連
+use_sink                  = true
+r_sink_au                 = 1000.0
+sink_rho_floor            = 1.0e-8
+sink_no_outflow_cells     = 1.0
+sink_refine_buffer_factor = 1.0
+sink_va_cap = 0.0  # sink内部のAlfven速度上限 [code velocity]
+                   # 0以下にすると磁場依存density floorを無効化
+                   # 物理的根拠を持って決めた値ではない
+sink_cfl_va_cap = 10.0  # CFL評価だけに使うAlfven速度上限
+sink_cfl_cap_radius_factor = 1.0  #CFL処理範囲 1.0ならシンク全体
+sink_cfl_max_relax = 1.2  #物理CFLに対して許す最大タイムステップ拡大率
+
+mstar_init                = 1.0  # 初期中心星質量(code mass = 約2 Msun)
+use_central_gravity = true
+use_nfw_gravity     = true
+epsilon = 0.22  #gravitational softning
+grav_const = 1.0
+use_rotation = true  #vphi
+vr0   = -0.85  #弱い降着流
+racc  = 0.44
+bz_microgauss = 3  #磁場Bzの強さ(μG単位)
+# AMRリファイン設定
+use_jeans_refine = true   # Jeans長ベースのリファイン
+jeans_cells      = 16.0     # Jeans長を解像するセル数
+
+# 密度勾配リファイン（オプション）
+# 使用する場合は以下を有効にし、refine_thrを適切に設定(推奨)
+use_grad_refine  = true
+refine_thr       = 0.2
+derefine_thr     = 0.1 
