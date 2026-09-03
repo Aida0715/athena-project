@@ -89,8 +89,8 @@ Real epsilon_soft = 0.5;   // gravitational softening
 
 // ===== unit system (code unit <-> cgs) =====
 const Real Munit = 4.0e33;   // g (central star mass)
-const Real Lunit = 6.7e15;   // cm (bondi radius)
-const Real Tunit = 3.34e10;  // s (free fall time)
+const Real Lunit = 1.4e16;   // cm (bondi radius)
+const Real Tunit = 1.02e11;  // s (free fall time)
 
 const Real Vunit = Lunit/Tunit;                 // velocity unit
 const Real Rhounit = Munit/(Lunit*Lunit*Lunit); // density unit
@@ -109,7 +109,7 @@ bool use_sink = true;
 Real r_sink = 0.0;
 
 // シンク内部に残す密度フロア
-Real sink_rho_floor = 1.0e-8;
+Real sink_rho_floor = 9.1e-8;
 
 // sink内部で許容するAlfven速度の上限 [code velocity]
 // <= 0 の場合はAlfven速度制限を使用しない
@@ -209,7 +209,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
    
   // シンク領域内の密度フロア
   sink_rho_floor =
-      pin->GetOrAddReal("problem", "sink_rho_floor", 1.0e-8);
+      pin->GetOrAddReal("problem", "sink_rho_floor", 9.1e-8);
 
   // sink内部のAlfven速度上限 [code velocity]
   // vA = |B|/sqrt(rho) <= sink_va_cap となるように数値的密度floorを調整する。
@@ -400,7 +400,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   use_rotation = pin->GetOrAddBoolean("problem","use_rotation",true);
 
   // raccを入力ファイルから
-  racc = pin->GetOrAddReal("problem", "racc", 0.44);
+  racc = pin->GetOrAddReal("problem", "racc", 0.211);
 
   //磁場の強さを入力ファイルから読み込む(μG単位)
   bz_microgauss = pin->GetOrAddReal("problem", "bz_microgauss", 0.0);
@@ -633,7 +633,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         // --- 回転速度（解析的M_encを使用）---
         // --- gas enclosed mass (Toyouchi+23) ---
-	Real M_gas = 4.0 * M_PI * 0.11 * pow(r_cyl, 1.25) / 1.25;
+	Real M_gas = 4.0 * M_PI * 0.268 * pow(r_cyl, 1.25) / 1.25;
 
 	// --- Toyouchi rotation: 0.5 vkep (gas only) ---
 	Real vphi_eff = 0.0;
