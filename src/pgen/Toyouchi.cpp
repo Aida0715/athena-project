@@ -71,7 +71,7 @@ Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true�
 Real derefine_thr = 0.1;
 
 // rotation parameters
-Real vr0   = 0.0;   // radial velocity
+bool use_radial_inflow = true;  // radial velocity
 bool use_rotation = true;  // 回転のON,OFFは入力ファイルで指定
 
 // 中心星重力
@@ -88,19 +88,18 @@ const Real Rs_phys   = 5.71e20;   // cm
 Real epsilon_soft = 0.5;   // gravitational softening
 
 // ===== unit system (code unit <-> cgs) =====
+const Real Msun = 1.98847e33;       // g
+const Real AU   = 1.495978707e13;   // cm
 const Real Munit = 4.0e33;   // g (central star mass)
-const Real Lunit = 1.4e16;   // cm (bondi radius)
-const Real Tunit = 1.02e11;  // s (free fall time)
+const Real Lunit = 7.03e15;   // cm ((bondi radius )/2 , bondi radius = 1.41e16)
+const Real Tunit = 3.61e10;  // s (free fall time)
+
+const Real fit_rmin_au = 1.0e3;  // フィッティング値を入れる最小半径
+const Real fit_rmax_au = 1.0e5;  // フィッティング値を入れる最大半径
 
 const Real Vunit = Lunit/Tunit;                 // velocity unit
 const Real Rhounit = Munit/(Lunit*Lunit*Lunit); // density unit
 const Real Punit = Rhounit*Vunit*Vunit;         // pressure unit
-
-// unit conversion
-const Real AU = 1.496e13;
-
-// 中心カットオフ用（速度減衰）
-Real racc = 0.0;   // accretion radius (cutoff scale)
 
 // ===== シンク用変数の宣言 =====
 bool use_sink = true;
@@ -109,7 +108,7 @@ bool use_sink = true;
 Real r_sink = 0.0;
 
 // シンク内部に残す密度フロア
-Real sink_rho_floor = 9.1e-8;
+Real sink_rho_floor = 1.16e-8;
 
 // sink内部で許容するAlfven速度の上限 [code velocity]
 // <= 0 の場合はAlfven速度制限を使用しない
@@ -190,6 +189,88 @@ Real bz_microgauss = 0.0;  // input value [microgauss]
 Real bz_code = 0.0;        // Athena++へ実際に渡す無次元磁場(z方向)
 Real Bunit = 0.0;          // magnetic-field unit [Gauss]
 
+// ===== MMH profile fit =====
+
+Real EvalMencLog10(Real x) {
+  const Real a7 = -7.788676111231e-02;
+  const Real a6 =  2.275118458482e+00;
+  const Real a5 = -2.833403653473e+01;
+  const Real a4 =  1.949057780535e+02;
+  const Real a3 = -7.991055212960e+02;
+  const Real a2 =  1.950381849463e+03;
+  const Real a1 = -2.618367288072e+03;
+  const Real a0 =  1.487855429715e+03;
+
+  // 係数自身に符号を含む
+  return (((((((a7*x + a6)*x + a5)*x + a4)*x
+                    + a3)*x + a2)*x + a1)*x + a0);
+}
+
+
+Real EvalMencDerivative(Real x) {
+  const Real a7 = -7.788676111231e-02;
+  const Real a6 =  2.275118458482e+00;
+  const Real a5 = -2.833403653473e+01;
+  const Real a4 =  1.949057780535e+02;
+  const Real a3 = -7.991055212960e+02;
+  const Real a2 =  1.950381849463e+03;
+  const Real a1 = -2.618367288072e+03;
+
+  return ((((((7.0*a7*x + 6.0*a6)*x + 5.0*a5)*x
+                    + 4.0*a4)*x + 3.0*a3)*x
+                    + 2.0*a2)*x + a1);
+}
+
+
+Real MencMMHMsun(Real r_code) {
+  const Real r_au = r_code * Lunit / AU;
+  const Real x = std::log10(r_au);
+  return std::pow(10.0, EvalMencLog10(x));
+}
+
+
+Real MencMMHCode(Real r_code) {
+  return MencMMHMsun(r_code) * Msun / Munit;
+}
+
+
+Real RhoMMHCode(Real r_code) {
+  const Real r_au = r_code * Lunit / AU;
+  const Real x = std::log10(r_au);
+
+  const Real p = EvalMencLog10(x);
+  const Real dpdx = EvalMencDerivative(x);
+
+  const Real rho_phys =
+      Msun / (4.0*M_PI*AU*AU*AU)
+      * std::pow(10.0, p - 3.0*x)
+      * dpdx;
+
+  return rho_phys / Rhounit;
+}
+
+
+Real VrMMHCode(Real r_code) {
+  const Real menc_msun = MencMMHMsun(r_code);
+  const Real X = std::log10(menc_msun);
+
+  const Real b7 =  3.165615459847e-02;
+  const Real b6 = -3.922864856779e-01;
+  const Real b5 =  1.939426454582e+00;
+  const Real b4 = -4.854009863733e+00;
+  const Real b3 =  6.385667760589e+00;
+  const Real b2 = -4.008658099016e+00;
+  const Real b1 =  1.097663564086e+00;
+  const Real b0 =  6.618510143019e-01;
+
+  const Real vr_kms =
+      (((((((b7*X + b6)*X + b5)*X + b4)*X
+                  + b3)*X + b2)*X + b1)*X + b0);
+
+  // 正の「流入速度の大きさ」を返す
+  return vr_kms * 1.0e5 / Vunit;
+}
+
 } // namespace
 
 
@@ -209,7 +290,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
    
   // シンク領域内の密度フロア
   sink_rho_floor =
-      pin->GetOrAddReal("problem", "sink_rho_floor", 9.1e-8);
+      pin->GetOrAddReal("problem", "sink_rho_floor", 1.16e-8);
 
   // sink内部のAlfven速度上限 [code velocity]
   // vA = |B|/sqrt(rho) <= sink_va_cap となるように数値的密度floorを調整する。
@@ -396,11 +477,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
   //追加 回転パラメータ読み込み
-  vr0   = pin->GetOrAddReal("problem","vr0", 0.0);
+  use_radial_inflow = pin->GetOrAddBoolean("problem", "use_radial_inflow", true);
   use_rotation = pin->GetOrAddBoolean("problem","use_rotation",true);
-
-  // raccを入力ファイルから
-  racc = pin->GetOrAddReal("problem", "racc", 0.211);
 
   //磁場の強さを入力ファイルから読み込む(μG単位)
   bz_microgauss = pin->GetOrAddReal("problem", "bz_microgauss", 0.0);
@@ -580,6 +658,12 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // isothermal sound speed
   Real cs = pin->GetReal("hydro","iso_sound_speed");
 
+  // fit範囲外で使う両端の密度。
+  const Real fit_rmin_code = fit_rmin_au * AU / Lunit;
+  const Real fit_rmax_code = fit_rmax_au * AU / Lunit;
+  const Real rho_inner = RhoMMHCode(fit_rmin_code);
+  const Real rho_outer = RhoMMHCode(fit_rmax_code);
+
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
       for (int i=is; i<=ie; ++i) {
@@ -596,24 +680,26 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
 	Real r_sph_safe = std::max(r_sph, 0.5*dx);
 
-        Real rphys = r_sph_safe * Lunit;
+        const Real r_sph_au = r_sph_safe * Lunit / AU;
 
-	// Toyouchi+23 density
-        Real rho_phys = 1.1e-19 * pow(rphys/(1.0e5*AU), -1.75);
-	Real rho_profile = rho_phys / Rhounit;
+        Real rho_final;
+        Real P_final;
 
-	// isothermal pressure
-	Real P_profile = rho_profile * cs * cs;
-
-        Real rho_final = rho_profile;
-	Real P_final   = P_profile;
-
-        // 初期状態ではシンク内部を低密度にしておく。
-        // この初期除去分は中心星への降着量には数えない。
         if (use_sink && r_sph < r_sink) {
+          // 1000 AUより内側はsink atmosphere
           rho_final = sink_rho_floor;
-          P_final   = sink_rho_floor * cs * cs;
+        } else if (r_sph_au < fit_rmin_au) {
+          // sinkを無効にした場合もfitを内振しない。
+          rho_final = rho_inner;
+        } else if (r_sph_au <= fit_rmax_au) {
+          // 1000--100000 AU：Mencの微分から密度を計算
+          rho_final = RhoMMHCode(r_sph_safe);
+        } else {
+          // 100000 AUより外側：fit最外密度を一様に配置
+          rho_final = rho_outer;
         }
+
+        P_final = rho_final * cs * cs;
 
         phydro->u(IDN,k,j,i) = rho_final;
 
@@ -626,42 +712,42 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         // 追加 rotation velocity
         Real vx = 0.0, vy = 0.0, vz = 0.0;
 
-        Real r_cyl = std::sqrt(x*x + y*y);
+        const Real r_cyl = std::sqrt(x*x + y*y);
+        const Real r_cyl_au = r_cyl * Lunit / AU;
 
-        // --- cutoff radius ---
-        Real r_cut = std::max(racc, 1e-12); // 入力ファイルでracc=0.44としているが念の為下限値を設定
+        Real vphi_eff = 0.0;
 
-        // --- 回転速度（解析的M_encを使用）---
-        // --- gas enclosed mass (Toyouchi+23) ---
-	Real M_gas = 4.0 * M_PI * 0.268 * pow(r_cyl, 1.25) / 1.25;
+        // rotation用Mencは円筒半径Rで評価する
+        if (use_rotation
+            && r_cyl_au >= fit_rmin_au
+            && r_cyl_au <= fit_rmax_au
+            && r_cyl > 0.0) {
+          const Real menc_rot_code = MencMMHCode(r_cyl);
 
-	// --- Toyouchi rotation: 0.5 vkep (gas only) ---
-	Real vphi_eff = 0.0;
-	if (use_rotation && r_cyl > 0.0) {
-    	    vphi_eff = 0.5 * std::sqrt(gconst * M_gas / r_cyl);
-	}
-
-        // 中心で滑らかにゼロへ（二次減衰で安定化）
-        if (r_cyl < r_cut) {
-            vphi_eff *= (r_cyl / r_cut) * (r_cyl / r_cut);
+          vphi_eff =
+              0.5 * std::sqrt(gconst * menc_rot_code / r_cyl);
         }
 
-        Real inv_r = 1.0 / std::max(r_cyl, 1e-12);
-        vx += -vphi_eff * y * inv_r;
-        vy +=  vphi_eff * x * inv_r;
+        // 円筒回転をCartesian成分へ変換
+        if (r_cyl > 0.0) {
+          const Real inv_r_cyl = 1.0 / r_cyl;
 
-        // --- spherical radial inflow toward the origin ---
-        if (vr0 != 0.0) {
-            Real vr_eff = vr0;
-            // 原点近傍で速度を滑らかに0へ落とす
-            if (r_sph < r_cut) {
-                vr_eff *= r_sph / r_cut;
-            }
+          vx += -vphi_eff * y * inv_r_cyl;
+          vy +=  vphi_eff * x * inv_r_cyl;
+        }
 
-            const Real inv_r_sph = 1.0 / r_sph_safe;
-            vx += vr_eff * x * inv_r_sph;
-            vy += vr_eff * y * inv_r_sph;
-            vz += vr_eff * z * inv_r_sph;
+        // 球対称のradial inflow
+        if (use_radial_inflow
+            && r_sph_au >= fit_rmin_au
+            && r_sph_au <= fit_rmax_au
+            && r_sph > 0.0) {
+          const Real vr_code = VrMMHCode(r_sph);
+          const Real inv_r_sph = 1.0 / r_sph;
+
+          // fit値は正の大きさなので、マイナスを付けて中心向きにする。
+          vx += -vr_code * x * inv_r_sph;
+          vy += -vr_code * y * inv_r_sph;
+          vz += -vr_code * z * inv_r_sph;
         }
 
         // シンク領域内部の速度をゼロにする
@@ -801,44 +887,9 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 
 	 }
 
-	 // ===== Debug print (before source update) =====
-        if (Globals::my_rank == 0 &&
-            pmb->gid == 435 &&
-            i == 0 && j == 31 && k == 31) {
-
-          std::cout
-            << "\n===== DEBUG CentralGravity =====\n"
-            << "time = " << time
-            << "  dt = " << dt << "\n"
-            << "gid = " << pmb->gid << "\n"
-            << "r = " << r << "\n"
-            << "gx = " << gx
-            << " gy = " << gy
-            << " gz = " << gz << "\n"
-            << "rho = " << prim(IDN,k,j,i) << "\n"
-            << "before M = ("
-            << cons(IM1,k,j,i) << ", "
-            << cons(IM2,k,j,i) << ", "
-            << cons(IM3,k,j,i) << ")"
-            << std::endl;
-        }
-
         cons(IM1,k,j,i) += dt * prim(IDN,k,j,i) * gx;
         cons(IM2,k,j,i) += dt * prim(IDN,k,j,i) * gy;
         cons(IM3,k,j,i) += dt * prim(IDN,k,j,i) * gz;
-
-	// ===== Debug print (after source update) =====
-        if (Globals::my_rank == 0 &&
-            pmb->gid == 435 &&
-            i == 0 && j == 31 && k == 31) {
-
-          std::cout
-            << "after  M = ("
-            << cons(IM1,k,j,i) << ", "
-            << cons(IM2,k,j,i) << ", "
-            << cons(IM3,k,j,i) << ")"
-            << std::endl;
-        }
       }
     }
   }
