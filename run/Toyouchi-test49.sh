@@ -2,8 +2,10 @@
 
 set -Eeuo pipefail
 
-# commit: bb01638 //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
+# commit: 33e9e2f //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
 # μ=1.22が誤っており、Toyouchi+23に合わせて2.3になおした。それに応じてL0などの基準単位を修正した。inputファイルに拡散係数を追加し、非理想MHD計算に対応できるようにした。
+# AMR許可領域を2✕10^4AUに限定した。密度勾配リファインをy,z方向にも適用できるようにした。vr,vφをToyouchi+23 fig.2から７次元多項式近似で取り直した。
+# Bz=0、回転のみ、自己重力OFF
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
@@ -78,7 +80,7 @@ exit "${status}"
   #Cosmic Ray Transport:         OFF
   #Cosmic Ray Diffusion:         OFF
   #Frame transformations:        OFF
-  #Self-Gravity:                 multigrid
+  #Self-Gravity:                 OFF
   #Super-Time-Stepping:          OFF
   #Chemistry:                    OFF
   #KIDA rates:                   OFF
@@ -95,4 +97,3 @@ exit "${status}"
   #HDF5 output:                  OFF
   #Compiler:                     g++
   #Compilation command:          g++  -O3 -std=c++11
-
