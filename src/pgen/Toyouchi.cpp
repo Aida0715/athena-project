@@ -69,6 +69,8 @@ bool use_grad_refine = false;   // 密度勾配ベースのリファインを使
 Real jeans_cells = 8.0;         // Jeans長を何セルで解像するか
 Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時)
 Real derefine_thr = 0.1;
+// 動的AMRを許可する中心からの半径 [code length]
+Real amr_radius = 0.0;
 
 // rotation parameters
 bool use_radial_inflow = true;  // radial velocity
@@ -506,6 +508,24 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // AMR関連の設定
   if (adaptive) {
+    const Real amr_radius_au =
+    pin->GetOrAddReal("problem", "amr_radius_au", 2.0e4);
+
+    // AMR有効領域の設定
+    if (amr_radius_au <= 0.0) {
+      throw std::runtime_error(
+          "problem/amr_radius_au must be positive");
+    }
+
+    amr_radius = amr_radius_au * AU / Lunit;
+
+    if (Globals::my_rank == 0) {
+      std::cout << "AMR: refinement restricted to r < "
+                << amr_radius_au << " AU"
+                << " (code radius = " << amr_radius << ")"
+                << std::endl;
+    }
+
     // AMRリファイン方式の選択（入力ファイルから読み込み）
     // デフォルト：Jeans長ベースのリファインを使用（自己重力系では必須）
     bool jeans_refine_input =
@@ -1318,6 +1338,15 @@ int RefinementCondition(MeshBlock *pmb) {
 
   const Real block_min_radius =
       std::sqrt(dx_block*dx_block + dy_block*dy_block + dz_block*dz_block);
+
+  // AMR許可領域   
+  const bool block_intersects_amr_region =
+      block_min_radius < amr_radius;
+  // AMR許可領域と全く交差しないMeshBlockは基本レベルへ戻す。
+  if (!block_intersects_amr_region) {
+    return -1;
+  }
+
   const bool sink_region_in_block =
       use_sink && block_min_radius < r_sink + sink_refine_buffer;
 
@@ -1334,6 +1363,16 @@ int RefinementCondition(MeshBlock *pmb) {
   for (int k = pmb->ks+1; k <= pmb->ke-1; ++k) {
     for (int j = pmb->js+1; j <= pmb->je-1; ++j) {
       for (int i = pmb->is+1; i <= pmb->ie-1; ++i) {
+
+        // セル判定をAMR許可領域内に限る
+        const Real x = pmb->pcoord->x1v(i) - x0;
+        const Real y = pmb->pcoord->x2v(j) - y0;
+        const Real z = pmb->pcoord->x3v(k) - z0;
+        const Real r_cell = std::sqrt(x*x + y*y + z*z);
+
+        if (r_cell >= amr_radius) {
+          continue;
+        }
 
         Real rho = pmb->phydro->w(IDN, k, j, i);
 
