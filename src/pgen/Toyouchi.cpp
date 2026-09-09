@@ -1403,12 +1403,22 @@ int RefinementCondition(MeshBlock *pmb) {
 
         // ===== 密度勾配 =====
         if (use_grad_refine) {
-          Real drho = 0.5 * std::abs(
+          const Real grad_x = 0.5 * std::abs(
             pmb->phydro->w(IDN, k, j, i+1) -
             pmb->phydro->w(IDN, k, j, i-1)
-          );
+          ) / rho_safe;
 
-          Real grad = drho / rho_safe;
+          const Real grad_y = 0.5 * std::abs(
+            pmb->phydro->w(IDN, k, j+1, i) -
+            pmb->phydro->w(IDN, k, j-1, i)
+          ) / rho_safe;
+
+          const Real grad_z = 0.5 * std::abs(
+            pmb->phydro->w(IDN, k+1, j, i) -
+            pmb->phydro->w(IDN, k-1, j, i)
+          ) / rho_safe;
+
+          const Real grad = std::max({grad_x, grad_y, grad_z});
           gradmax = std::max(gradmax, grad);
         }
       }
