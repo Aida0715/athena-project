@@ -60,9 +60,9 @@ level = 5
 
 
 <meshblock>
-nx1        = 10
-nx2        = 10
-nx3        = 10
+nx1        = 8
+nx2        = 8
+nx3        = 8
 
 <hydro>
 gamma           = 1.001            # gamma = C_p/C_v ~等温
