@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # commit: 33e9e2f //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# 磁場なし、回転のみ、自己重力ON。シンクフロアを固定し、密度フロアを1e-7にした。
+# 磁場なし、回転のみ、自己重力ON。シンクフロアをWise+19(fig.4)を根拠に6.3e-2に設定。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
