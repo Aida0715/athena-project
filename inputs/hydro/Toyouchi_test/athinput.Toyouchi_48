@@ -67,7 +67,7 @@ nx3        = 8
 <hydro>
 gamma           = 1.001            # gamma = C_p/C_v ~等温
 iso_sound_speed = 0.707          # rb=2*L0, hence cs_code=1/sqrt(2)
-dfloor          = 1.0e-7
+dfloor          = 1.0e-6
 
 <gravity>
 mgmode          = FMG
@@ -84,7 +84,7 @@ ox3_bc          = multipole
 # sink関連
 use_sink                  = true
 r_sink_au                 = 1000.0
-sink_rho_floor            = 1.0e-6
+sink_rho_floor            = 6.3e-2  #Wise+19(fig.4)より
 sink_no_outflow_cells     = 1.0
 sink_refine_buffer_factor = 1.0
 sink_va_cap = 0.0  # sink内部のAlfven速度上限 [code velocity]
