@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # commit: 33e9e2f //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# BzをLatif+24を根拠に3e-20に設定。
+# BzをLatif+14を根拠に3e-20に設定。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
