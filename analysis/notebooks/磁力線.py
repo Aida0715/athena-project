@@ -58,6 +58,13 @@ plot_resolution = 700
 # 磁力線の密度
 stream_density = 1.5
 
+# x-z面の法線（y方向）に平均する半厚み。
+# 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
+slice_half_thickness_cells = 2.0
+
+# 白抜きにする球対称シンク領域の半径 [AU]
+sink_radius_au = 1000.0
+
 # 図のサイズ
 figsize = (9, 8)
 
@@ -220,10 +227,8 @@ def find_array_name(grid, candidates):
 def load_xz_slice(step):
     """
     y=0面と交差するMeshBlockから、
-    y=0に最も近いセル中心層を抽出する。
-
-    偶数セル数でy=0を挟む2層が選ばれた場合は、
-    後で同一(x,z)座標について平均する。
+    各MeshBlockのy方向セル幅を基準に有限厚みのスラブを抽出する。
+    同一(x,z)座標に含まれる複数のy層は後段で平均する。
     """
 
     x_list = []
@@ -301,17 +306,19 @@ def load_xz_slice(step):
 
         y = points[:, 1]
 
-        min_abs_y = np.min(np.abs(y))
+        unique_y = np.unique(y)
+        dy_values = np.diff(unique_y)
+        dy_values = dy_values[dy_values > 0.0]
+        if dy_values.size:
+            dy_local = np.min(dy_values)
+        else:
+            dy_local = max(ymax - ymin, 1.0e-12)
 
-        tolerance = max(
-            1.0e-10,
-            min_abs_y * 1.0e-6
+        slab_half_thickness = (
+            slice_half_thickness_cells * dy_local
         )
-
-        plane_mask = (
-            np.abs(np.abs(y) - min_abs_y)
-            <= tolerance
-        )
+        tolerance = max(1.0e-12, 1.0e-10 * dy_local)
+        plane_mask = np.abs(y) <= slab_half_thickness + tolerance
 
         valid_mask = (
             plane_mask
@@ -331,7 +338,7 @@ def load_xz_slice(step):
 
     if not x_list:
         raise RuntimeError(
-            "No cells near y=0 were found.\n"
+            "No cells in the finite-thickness slab around y=0 were found.\n"
             f"step={step:05d}"
         )
 
@@ -355,7 +362,7 @@ def load_xz_slice(step):
 
 def average_duplicate_xz(x, z, rho, B):
     """
-    y=0を挟む2層やMeshBlock境界によって同一(x,z)座標に
+    y=0まわりの複数層やMeshBlock境界によって同一(x,z)座標に
     複数の値がある場合、それらを平均する。
     """
 
@@ -532,10 +539,10 @@ def plot_xz_density_with_fieldlines(
         + Bz_microgauss**2
     )
 
-    time_myr = (
+    time_kyr = (
         data["time_code"]
         * Tunit
-        / (1.0e6 * YEAR)
+        / (1.0e3 * YEAR)
     )
 
     # --------------------------------------------------------
@@ -781,9 +788,17 @@ def plot_xz_density_with_fieldlines(
         Bz_grid
     )
 
+    # シンク球と断面の交差領域は、密度だけを白抜きにする。
+    # 磁力線はシンク内部も含めて連続的に描画する。
+    sink_mask_grid = np.hypot(X, Z) < sink_radius_au
+    rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
+
     has_projected_field = np.any(
         Bproj_grid > 0.0
     )
+
+    density_cmap = plt.get_cmap("YlGnBu").copy()
+    density_cmap.set_bad("white")
 
     # --------------------------------------------------------
     # 描画
@@ -796,8 +811,8 @@ def plot_xz_density_with_fieldlines(
     density_map = ax.pcolormesh(
         X,
         Z,
-        rho_grid,
-        cmap="YlGnBu",
+        rho_grid_plot,
+        cmap=density_cmap,
         norm=LogNorm(
             vmin=rho_vmin,
             vmax=rho_vmax
@@ -905,9 +920,9 @@ def plot_xz_density_with_fieldlines(
     )
 
     ax.set_title(
-        "Density and projected magnetic field lines\n"
+        "Density and projected magnetic field lines: x-z\n"
         f"step={step:05d}, "
-        f"t={time_myr:.3e} Myr"
+        f"t={time_kyr:.1f} kyr"
         f"{zoom_title}"
     )
 
@@ -939,12 +954,6 @@ def plot_xz_density_with_fieldlines(
         )
     )
 
-    Bymax_visible = np.max(
-        np.abs(
-            By_microgauss[source_mask]
-        )
-    )
-
     Bzmax_visible = np.max(
         np.abs(
             Bz_microgauss[source_mask]
@@ -954,9 +963,7 @@ def plot_xz_density_with_fieldlines(
     information = (
         f"|B|max  = {Bmax_visible:.3e} μG\n"
         f"|Bx|max = {Bxmax_visible:.3e} μG\n"
-        f"|By|max = {Bymax_visible:.3e} μG\n"
-        f"|Bz|max = {Bzmax_visible:.3e} μG\n"
-        f"source cells = {number_of_source_points}"
+        f"|Bz|max = {Bzmax_visible:.3e} μG"
     )
 
     ax.text(
@@ -1028,7 +1035,7 @@ def plot_xz_density_with_fieldlines(
 
     print(
         f"[SAVED] step={step:05d}, "
-        f"time={time_myr:.3e} Myr\n"
+        f"time={time_kyr:.1f} kyr\n"
         f"        {output_file}"
     )
 
@@ -1148,17 +1155,15 @@ vtk_dir = os.path.expanduser(
     "~/athena-project/results/〇〇"
 )
 
-# 全体図の保存先
-output_dir1 = os.path.join(
+# 親出力ディレクトリ
+output_root_xy = os.path.join(
     vtk_dir,
     "xy_density_with_magnetic_fieldlines"
 )
 
-# 1/10ズーム図の保存先
-output_dir2 = os.path.join(
-    vtk_dir,
-    "xy_density_with_magnetic_fieldlines_zoom_1over10"
-)
+# x-z版と同じく、全体図とズーム図を同じ親ディレクトリに格納
+output_dir1 = os.path.join(output_root_xy, "full")
+output_dir2 = os.path.join(output_root_xy, "zoom_1over10")
 
 os.makedirs(output_dir1, exist_ok=True)
 os.makedirs(output_dir2, exist_ok=True)
@@ -1172,6 +1177,13 @@ plot_resolution = 700
 # 磁力線の密度
 stream_density = 1.5
 
+# x-y面の法線（z方向）に平均する半厚み。
+# 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
+slice_half_thickness_cells = 2.0
+
+# 白抜きにする球対称シンク領域の半径 [AU]
+sink_radius_au = 1000.0
+
 # 図のサイズ
 figsize = (9, 8)
 
@@ -1179,6 +1191,7 @@ figsize = (9, 8)
 dpi = 200
 
 print("=== Output directories ===")
+print(f"Output root : {output_root_xy}")
 print(f"Full images : {output_dir1}")
 print(f"1/10 zoom   : {output_dir2}")
 
@@ -1203,7 +1216,7 @@ YEAR = 3.15576e7
 
 print("\n=== Code units ===")
 print(f"Lunit   = {Lunit:.6e} cm")
-print(f"Rhounit = {Rhounit:.6e} g/cm^3")
+print(f"Rhounit = {Rhounit:.6e} g cm^-3")
 print(f"Bunit   = {Bunit:.6e} Gauss")
 print(f"Tunit   = {Tunit/(1.0e6*YEAR):.6e} Myr")
 
@@ -1326,10 +1339,8 @@ def find_array_name(grid, candidates):
 def load_xy_slice(step):
     """
     z=0面を含むMeshBlockから、
-    z=0に最も近いセル層を抽出する。
-
-    偶数セル数の場合、z=0を挟む上下2層が選ばれる。
-    後で同じ(x,y)座標について平均する。
+    各MeshBlockのz方向セル幅を基準に有限厚みのスラブを抽出する。
+    同一(x,y)座標に含まれる複数のz層は後段で平均する。
     """
 
     x_list = []
@@ -1401,23 +1412,19 @@ def load_xy_slice(step):
 
         z = points[:, 2]
 
-        # このMeshBlockでz=0に最も近い距離
-        min_abs_z = np.min(
-            np.abs(z)
-        )
+        unique_z = np.unique(z)
+        dz_values = np.diff(unique_z)
+        dz_values = dz_values[dz_values > 0.0]
+        if dz_values.size:
+            dz_local = np.min(dz_values)
+        else:
+            dz_local = max(zmax - zmin, 1.0e-12)
 
-        # 丸め誤差を許容
-        tolerance = max(
-            1.0e-10,
-            min_abs_z * 1.0e-6
+        slab_half_thickness = (
+            slice_half_thickness_cells * dz_local
         )
-
-        mask = (
-            np.abs(
-                np.abs(z) - min_abs_z
-            )
-            <= tolerance
-        )
+        tolerance = max(1.0e-12, 1.0e-10 * dz_local)
+        mask = np.abs(z) <= slab_half_thickness + tolerance
 
         if not np.any(mask):
             continue
@@ -1440,7 +1447,7 @@ def load_xy_slice(step):
 
     if not x_list:
         raise RuntimeError(
-            "No cells near z=0 were found.\n"
+            "No cells in the finite-thickness slab around z=0 were found.\n"
             f"step = {step:05d}"
         )
 
@@ -1471,7 +1478,7 @@ def average_duplicate_xy(
     """
     同じ(x,y)座標に複数のセル値がある場合に平均する。
 
-    z=0を挟む2層やMeshBlock境界の重複を処理する。
+    z=0まわりの複数層やMeshBlock境界の重複を処理する。
     """
 
     coords = np.column_stack([
@@ -1603,11 +1610,11 @@ if rho_vmax <= rho_vmin:
     )
 
 print(
-    f"\nrho_vmin = {rho_vmin:.6e} g/cm^3"
+    f"\nrho_vmin = {rho_vmin:.6e} g cm^-3"
 )
 
 print(
-    f"rho_vmax = {rho_vmax:.6e} g/cm^3"
+    f"rho_vmax = {rho_vmax:.6e} g cm^-3"
 )
 
 
@@ -1711,10 +1718,10 @@ def plot_xy_density_with_fieldlines(
 
     time_code = data["time_code"]
 
-    time_myr = (
+    time_kyr = (
         time_code
         * Tunit
-        / (1.0e6 * YEAR)
+        / (1.0e3 * YEAR)
     )
 
     # --------------------------------------------------------
@@ -1917,35 +1924,35 @@ def plot_xy_density_with_fieldlines(
         neginf=0.0
     )
 
-    # x-y面内の磁場強度。
-    # 初期磁場が純粋なBzの場合、Bx=By=0なのでstreamplotは描けない。
-    # その場合も異常終了せず、密度マップだけを保存する。
-    Bproj_grid = np.sqrt(
-        Bx_grid**2
-        + By_grid**2
+    # x-y面内の磁場強度。弱磁場を除外する閾値は設けない。
+    # 方向だけをstreamplotへ渡すことで、絶対強度が非常に小さくても
+    # 同じ磁力線形状を追跡できるようにする。
+    Bproj_grid = np.hypot(Bx_grid, By_grid)
+    nonzero_projected_field = Bproj_grid > 0.0
+
+    Bx_direction = np.divide(
+        Bx_grid,
+        Bproj_grid,
+        out=np.zeros_like(Bx_grid),
+        where=nonzero_projected_field,
+    )
+    By_direction = np.divide(
+        By_grid,
+        Bproj_grid,
+        out=np.zeros_like(By_grid),
+        where=nonzero_projected_field,
     )
 
-    finite_Bproj = Bproj_grid[
-        np.isfinite(Bproj_grid)
-    ]
+    # シンク球と断面の交差領域は、密度だけを白抜きにする。
+    # 磁力線はシンク内部も含めて連続的に描画する。
+    sink_mask_grid = np.hypot(X, Y) < sink_radius_au
+    rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
 
-    if finite_Bproj.size > 0:
-        Bproj_max = np.max(finite_Bproj)
-    else:
-        Bproj_max = 0.0
+    # 全領域で完全にBx=By=0の場合だけ磁力線を描けない。
+    has_projected_field = np.any(nonzero_projected_field)
 
-    # 丸め誤差程度の面内磁場で偽の磁力線を描かないよう、
-    # 全磁場最大値に対する相対閾値も設ける。
-    B_reference = np.max(Bmag_microG[mask])
-    projected_field_tolerance = max(
-        1.0e-30,
-        1.0e-12 * B_reference,
-    )
-
-    has_projected_field = (
-        np.isfinite(Bproj_max)
-        and Bproj_max > projected_field_tolerance
-    )
+    density_cmap = plt.get_cmap("YlGnBu").copy()
+    density_cmap.set_bad("white")
 
     # --------------------------------------------------------
     # 描画
@@ -1958,9 +1965,9 @@ def plot_xy_density_with_fieldlines(
     density_map = ax.pcolormesh(
         X,
         Y,
-        rho_grid,
+        rho_grid_plot,
         # 論文図風：低密度=淡い黄緑、高密度=濃い青
-        cmap="YlGnBu",
+        cmap=density_cmap,
         norm=LogNorm(
             vmin=rho_vmin,
             vmax=rho_vmax
@@ -1973,8 +1980,8 @@ def plot_xy_density_with_fieldlines(
         ax.streamplot(
             x_grid,
             y_grid,
-            Bx_grid,
-            By_grid,
+            Bx_direction,
+            By_direction,
             color="black",
             density=stream_density,
             linewidth=0.65,
@@ -2059,7 +2066,7 @@ def plot_xy_density_with_fieldlines(
     ax.set_title(
         "Density and projected magnetic field lines: x-y midplane\n"
         f"step={step:05d}, "
-        f"t={time_myr:.3e} Myr"
+        f"t={time_kyr:.1f} kyr"
     )
 
     ax.set_xlim(
@@ -2100,8 +2107,7 @@ def plot_xy_density_with_fieldlines(
     info = (
         f"Bmax = {Bmax_visible:.3e} μG\n"
         f"|Bx|max = {Bxmax_visible:.3e} μG\n"
-        f"|By|max = {Bymax_visible:.3e} μG\n"
-        f"source cells = {number_of_source_points}"
+        f"|By|max = {Bymax_visible:.3e} μG"
     )
 
     ax.text(
@@ -2151,7 +2157,7 @@ def plot_xy_density_with_fieldlines(
 
     print(
         f"[SAVED] step={step:05d}, "
-        f"time={time_myr:.3e} Myr\n"
+        f"time={time_kyr:.1f} kyr\n"
         f"        {output_file}"
     )
 
@@ -2248,4 +2254,3 @@ for filename in zoom10_output_files:
 
 
      
-
