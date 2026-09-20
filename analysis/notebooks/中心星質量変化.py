@@ -437,7 +437,7 @@ ax.set_xlabel(
 )
 
 ax.set_ylabel(
-    r""
+    r"$M_\odot$"
 )
 
 ax.set_title(
