@@ -71,6 +71,9 @@ figsize = (9, 8)
 # 保存画像のdpi
 dpi = 200
 
+# Falseなら保存済み画像を再描画せず、途中から再開できる。
+overwrite_existing = False
+
 print("=== Output directories ===")
 print(f"Output root : {output_root}")
 print(f"Full images : {output_dir_full}")
@@ -436,7 +439,8 @@ for index, step in enumerate(timesteps):
     )
 
     del slice_data, rho_cgs, valid_density
-    gc.collect()
+    if (index + 1) % 10 == 0:
+        gc.collect()
 
 if not rho_vmin_candidates:
     raise RuntimeError(
@@ -475,7 +479,8 @@ def plot_xz_density_with_fieldlines(
     step,
     output_dir,
     zoom_fraction=None,
-    filename_suffix=""
+    filename_suffix="",
+    prepared_data=None,
 ):
     """
     x-z密度マップへx-z面に射影した磁力線を重ねる。
@@ -492,7 +497,12 @@ def plot_xz_density_with_fieldlines(
         exist_ok=True
     )
 
-    data = load_xz_slice(step)
+    # prepared_dataを渡した場合、全体図とズーム図でVTK読込を共有する。
+    data = (
+        load_xz_slice(step)
+        if prepared_data is None
+        else prepared_data
+    )
 
     (
         x_code,
@@ -1043,56 +1053,75 @@ def plot_xz_density_with_fieldlines(
 
 
 # ============================================================
-# 10. 全体図を保存
+# 10. 各1時刻を1回だけ読み込み、全体図とズーム図を連続保存
 # ============================================================
-
-print("\n=== Generating full-domain images ===")
+print("\n=== Generating full and 1/10-zoom images ===")
 
 full_output_files = []
-
-for index, step in enumerate(timesteps):
-    print(
-        f"[FULL {index + 1:3d}/{len(timesteps):3d}] "
-        f"Processing step={step:05d}"
-    )
-
-    output_file = plot_xz_density_with_fieldlines(
-        step=step,
-        output_dir=output_dir_full,
-        zoom_fraction=None,
-        filename_suffix="full"
-    )
-
-    full_output_files.append(
-        output_file
-    )
-
-
-# ============================================================
-# 11. 1/10ズーム図を保存
-# ============================================================
-
-print("\n=== Generating 1/10 zoom images ===")
-
 zoom10_output_files = []
 
 for index, step in enumerate(timesteps):
+    full_file = os.path.join(
+        output_dir_full,
+        f"xz_density_Blines_{step:05d}_full.png",
+    )
+    zoom_file = os.path.join(
+        output_dir_zoom10,
+        f"xz_density_Blines_{step:05d}_zoom_1over10.png",
+    )
+
+    need_full = overwrite_existing or not os.path.isfile(full_file)
+    need_zoom = overwrite_existing or not os.path.isfile(zoom_file)
+
+    if not need_full and not need_zoom:
+        print(
+            f"[SKIP {index + 1:3d}/{len(timesteps):3d}] "
+            f"step={step:05d}: both images already exist"
+        )
+        full_output_files.append(full_file)
+        zoom10_output_files.append(zoom_file)
+        continue
+
     print(
-        f"[ZOOM 1/10 "
-        f"{index + 1:3d}/{len(timesteps):3d}] "
-        f"Processing step={step:05d}"
+        f"[LOAD {index + 1:3d}/{len(timesteps):3d}] "
+        f"step={step:05d}"
     )
+    step_data = load_xz_slice(step)
 
-    output_file = plot_xz_density_with_fieldlines(
-        step=step,
-        output_dir=output_dir_zoom10,
-        zoom_fraction=zoom_fraction_10,
-        filename_suffix="zoom_1over10"
-    )
+    if need_full:
+        print(f"[FULL] Processing step={step:05d}")
+        full_file = plot_xz_density_with_fieldlines(
+            step=step,
+            output_dir=output_dir_full,
+            zoom_fraction=None,
+            filename_suffix="full",
+            prepared_data=step_data,
+        )
+        plt.close("all")
+        gc.collect()
+    else:
+        print(f"[SKIP] Full image already exists: {full_file}")
 
-    zoom10_output_files.append(
-        output_file
-    )
+    if need_zoom:
+        print(f"[ZOOM 1/10] Processing step={step:05d}")
+        zoom_file = plot_xz_density_with_fieldlines(
+            step=step,
+            output_dir=output_dir_zoom10,
+            zoom_fraction=zoom_fraction_10,
+            filename_suffix="zoom_1over10",
+            prepared_data=step_data,
+        )
+        plt.close("all")
+        gc.collect()
+    else:
+        print(f"[SKIP] Zoom image already exists: {zoom_file}")
+
+    full_output_files.append(full_file)
+    zoom10_output_files.append(zoom_file)
+
+    # 次時刻へ進む前にPyVista由来の生配列も解放する。
+    del step_data
+    gc.collect()
 
 
 # ============================================================
@@ -1135,6 +1164,7 @@ for filename in zoom10_output_files:
 import os
 import re
 import glob
+import gc
 from collections import defaultdict
 
 import numpy as np
@@ -1189,6 +1219,13 @@ figsize = (9, 8)
 
 # 保存画像のdpi
 dpi = 200
+
+# 共通カラースケール計算で各時刻から保持する密度の最大標本数。
+# 全セルを保持しないことで、101時刻でもメモリ使用量を一定に抑える。
+max_color_samples_per_step = 20000
+
+# Falseなら保存済み画像を再描画せず、途中から再開できる。
+overwrite_existing = False
 
 print("=== Output directories ===")
 print(f"Output root : {output_root_xy}")
@@ -1566,6 +1603,7 @@ print(
 )
 
 density_samples = []
+rho_vmax_global = -np.inf
 
 for n, step in enumerate(timesteps):
     slice_data = load_xy_slice(step)
@@ -1587,15 +1625,31 @@ for n, step in enumerate(timesteps):
         & (rho_cgs > 0.0)
     )
 
+    valid_density = None
     if np.any(valid):
-        density_samples.append(
-            rho_cgs[valid]
+        valid_density = rho_cgs[valid]
+        rho_vmax_global = max(
+            rho_vmax_global,
+            float(np.max(valid_density)),
         )
+        if valid_density.size > max_color_samples_per_step:
+            sample_indices = np.linspace(
+                0,
+                valid_density.size - 1,
+                max_color_samples_per_step,
+                dtype=int,
+            )
+            valid_density = valid_density[sample_indices]
+        density_samples.append(valid_density.copy())
 
     print(
         f"  [{n+1:3d}/{len(timesteps):3d}] "
         f"step={step:05d}"
     )
+
+    del slice_data, rho_average_code, rho_cgs, valid, valid_density
+    if (n + 1) % 10 == 0:
+        gc.collect()
 
 if not density_samples:
     raise RuntimeError(
@@ -1612,10 +1666,12 @@ rho_vmin = np.percentile(
     0.5
 )
 
-# 全時刻の最大密度を含める
-rho_vmax = np.max(
-    all_slice_density
-)
+# 最大値だけは標本化せず、全時刻・全セルから取得した値を使う。
+rho_vmax = rho_vmax_global
+
+# 以後はスカラーのvmin/vmaxだけを使うため、標本配列を即時解放する。
+del all_slice_density, density_samples
+gc.collect()
 
 if not np.isfinite(rho_vmin):
     raise RuntimeError(
@@ -1657,7 +1713,8 @@ def plot_xy_density_with_fieldlines(
     step,
     output_dir,
     zoom_fraction=None,
-    filename_suffix=""
+    filename_suffix="",
+    prepared_data=None,
 ):
     """
     x-y密度マップへ、x-y面に射影した磁力線を重ねる。
@@ -1682,7 +1739,12 @@ def plot_xy_density_with_fieldlines(
         exist_ok=True
     )
 
-    data = load_xy_slice(step)
+    # prepared_dataを渡した場合、全体図とズーム図でVTK読込を共有する。
+    data = (
+        load_xy_slice(step)
+        if prepared_data is None
+        else prepared_data
+    )
 
     x_code = data["x_code"]
     y_code = data["y_code"]
@@ -2198,59 +2260,76 @@ def plot_xy_density_with_fieldlines(
 
 
 # ============================================================
-# 10. 全体図をoutput_dir1へ保存
+# 10. 各1時刻を1回だけ読み込み、全体図とズーム図を連続保存
 # ============================================================
-
-print("\n=== Generating full-domain images ===")
+print("\n=== Generating full and 1/10-zoom images ===")
 
 full_output_files = []
-
-for n, step in enumerate(timesteps):
-    print(
-        f"[FULL {n+1:3d}/{len(timesteps):3d}] "
-        f"Processing step={step:05d}"
-    )
-
-    output_file = (
-        plot_xy_density_with_fieldlines(
-            step=step,
-            output_dir=output_dir1,
-            zoom_fraction=None,
-            filename_suffix="full"
-        )
-    )
-
-    full_output_files.append(
-        output_file
-    )
-
-
-# ============================================================
-# 11. 1/10ズーム図をoutput_dir2へ保存
-# ============================================================
-
-print("\n=== Generating 1/10 zoom images ===")
-
 zoom10_output_files = []
 
 for n, step in enumerate(timesteps):
-    print(
-        f"[ZOOM 1/10 {n+1:3d}/{len(timesteps):3d}] "
-        f"Processing step={step:05d}"
+    full_file = os.path.join(
+        output_dir1,
+        f"xy_density_Blines_{step:05d}_full.png",
+    )
+    zoom_file = os.path.join(
+        output_dir2,
+        f"xy_density_Blines_{step:05d}_zoom_1over10.png",
     )
 
-    output_file = (
-        plot_xy_density_with_fieldlines(
+    need_full = overwrite_existing or not os.path.isfile(full_file)
+    need_zoom = overwrite_existing or not os.path.isfile(zoom_file)
+
+    if not need_full and not need_zoom:
+        print(
+            f"[SKIP {n+1:3d}/{len(timesteps):3d}] "
+            f"step={step:05d}: both images already exist"
+        )
+        full_output_files.append(full_file)
+        zoom10_output_files.append(zoom_file)
+        continue
+
+    print(
+        f"[LOAD {n+1:3d}/{len(timesteps):3d}] "
+        f"step={step:05d}"
+    )
+    step_data = load_xy_slice(step)
+
+    if need_full:
+        print(f"[FULL] Processing step={step:05d}")
+        full_file = plot_xy_density_with_fieldlines(
+            step=step,
+            output_dir=output_dir1,
+            zoom_fraction=None,
+            filename_suffix="full",
+            prepared_data=step_data,
+        )
+        # plot関数の局所配列とMatplotlibの循環参照を回収
+        plt.close("all")
+        gc.collect()
+    else:
+        print(f"[SKIP] Full image already exists: {full_file}")
+
+    if need_zoom:
+        print(f"[ZOOM 1/10] Processing step={step:05d}")
+        zoom_file = plot_xy_density_with_fieldlines(
             step=step,
             output_dir=output_dir2,
             zoom_fraction=zoom_fraction_10,
-            filename_suffix="zoom_1over10"
+            filename_suffix="zoom_1over10",
+            prepared_data=step_data,
         )
-    )
+        plt.close("all")
+        gc.collect()
+    else:
+        print(f"[SKIP] Zoom image already exists: {zoom_file}")
 
-    zoom10_output_files.append(
-        output_file
-    )
+    full_output_files.append(full_file)
+    zoom10_output_files.append(zoom_file)
+
+    # 次時刻へ進む前にPyVista由来の生配列も解放
+    del step_data
+    gc.collect()
 
 
 # ============================================================
