@@ -16,7 +16,7 @@ video2 = "/home/aian/athena-project/results/jeans_3d-test26/xy_density_maps/xy_d
 # ============================
 # 出力先
 # ============================
-outdir = "/home/aian/athena-project/results/jeans_3d-test26/videos"
+outdir = "/home/aian/athena-project/results/〇〇/videos"
 os.makedirs(outdir, exist_ok=True)
 
 outfile = os.path.join(outdir, "〇〇.mp4")
