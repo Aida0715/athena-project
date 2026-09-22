@@ -1177,9 +1177,9 @@ plot_resolution = 700
 # 磁力線の密度
 stream_density = 1.5
 
-# x-y面の法線（z方向）に平均する半厚み。
-# 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
-slice_half_thickness_cells = 2.0
+# x-y面の法線（z方向）に平均する共通の半厚み [AU]。
+# AMRレベルによらず、全MeshBlockで同じ物理厚みを使う。
+slice_half_thickness_au = 1000.0
 
 # 白抜きにする球対称シンク領域の半径 [AU]
 sink_radius_au = 1000.0
@@ -1338,15 +1338,16 @@ def find_array_name(grid, candidates):
 
 def load_xy_slice(step):
     """
-    z=0面を含むMeshBlockから、
-    各MeshBlockのz方向セル幅を基準に有限厚みのスラブを抽出する。
-    同一(x,y)座標に含まれる複数のz層は後段で平均する。
+    z=0まわりの固定物理厚みのスラブと交差するセルを抽出する。
+    後段では各セルとスラブが重なるz方向の長さを重みとして、
+    同一(x,y)座標の密度と磁場を平均する。
     """
 
     x_list = []
     y_list = []
     rho_list = []
     B_list = []
+    weight_list = []
 
     # z=0と交差する全MeshBlockの実境界
     domain_xmin = np.inf
@@ -1360,6 +1361,10 @@ def load_xy_slice(step):
         files[0]
     )
 
+    slab_half_thickness_code = (
+        slice_half_thickness_au * AU / Lunit
+    )
+
     for filename in files:
         grid = pv.read(filename)
 
@@ -1370,8 +1375,12 @@ def load_xy_slice(step):
         zmin = bounds[4]
         zmax = bounds[5]
 
-        # このMeshBlockがz=0面を含まなければ除外
-        if not (zmin <= 0.0 <= zmax):
+        # 固定厚みのスラブと交差しないMeshBlockを除外
+        if (
+            zmax < -slab_half_thickness_code
+            or zmin > slab_half_thickness_code
+        ):
+            del grid
             continue
 
         domain_xmin = min(domain_xmin, bounds[0])
@@ -1420,11 +1429,19 @@ def load_xy_slice(step):
         else:
             dz_local = max(zmax - zmin, 1.0e-12)
 
-        slab_half_thickness = (
-            slice_half_thickness_cells * dz_local
+        # 各セル区間と共通スラブとの重なり長さ。
+        # 境界セルは重なっている割合だけ平均へ寄与する。
+        cell_lower = z - 0.5 * dz_local
+        cell_upper = z + 0.5 * dz_local
+        overlap = np.minimum(
+            cell_upper,
+            slab_half_thickness_code,
+        ) - np.maximum(
+            cell_lower,
+            -slab_half_thickness_code,
         )
-        tolerance = max(1.0e-12, 1.0e-10 * dz_local)
-        mask = np.abs(z) <= slab_half_thickness + tolerance
+        overlap = np.clip(overlap, 0.0, None)
+        mask = overlap > 0.0
 
         if not np.any(mask):
             continue
@@ -1445,6 +1462,12 @@ def load_xy_slice(step):
             B[mask]
         )
 
+        weight_list.append(
+            overlap[mask]
+        )
+
+        del points, rho, B, grid
+
     if not x_list:
         raise RuntimeError(
             "No cells in the finite-thickness slab around z=0 were found.\n"
@@ -1458,6 +1481,7 @@ def load_xy_slice(step):
         "y_code": np.concatenate(y_list),
         "rho_code": np.concatenate(rho_list),
         "B_code": np.vstack(B_list),
+        "slab_weight_code": np.concatenate(weight_list),
         "domain_xmin_code": domain_xmin,
         "domain_xmax_code": domain_xmax,
         "domain_ymin_code": domain_ymin,
@@ -1473,11 +1497,13 @@ def average_duplicate_xy(
     x,
     y,
     rho,
-    B
+    B,
+    weights,
 ):
     """
     同じ(x,y)座標に複数のセル値がある場合に平均する。
 
+    固定厚みスラブとの重なり長さで重み付けし、
     z=0まわりの複数層やMeshBlock境界の重複を処理する。
     """
 
@@ -1492,36 +1518,34 @@ def average_duplicate_xy(
         return_inverse=True
     )
 
-    counts = np.bincount(
-        inverse
-    ).astype(float)
+    weight_sum = np.bincount(inverse, weights=weights)
 
     rho_sum = np.bincount(
         inverse,
-        weights=rho
+        weights=rho * weights
     )
 
     Bx_sum = np.bincount(
         inverse,
-        weights=B[:, 0]
+        weights=B[:, 0] * weights
     )
 
     By_sum = np.bincount(
         inverse,
-        weights=B[:, 1]
+        weights=B[:, 1] * weights
     )
 
     Bnormal_sum = np.bincount(
         inverse,
-        weights=B[:, 2]
+        weights=B[:, 2] * weights
     )
 
-    rho_avg = rho_sum / counts
+    rho_avg = rho_sum / weight_sum
 
     B_avg = np.column_stack([
-        Bx_sum / counts,
-        By_sum / counts,
-        Bnormal_sum / counts
+        Bx_sum / weight_sum,
+        By_sum / weight_sum,
+        Bnormal_sum / weight_sum
     ])
 
     return (
@@ -1546,9 +1570,16 @@ density_samples = []
 for n, step in enumerate(timesteps):
     slice_data = load_xy_slice(step)
 
+    _, _, rho_average_code, _ = average_duplicate_xy(
+        slice_data["x_code"],
+        slice_data["y_code"],
+        slice_data["rho_code"],
+        slice_data["B_code"],
+        slice_data["slab_weight_code"],
+    )
+
     rho_cgs = (
-        slice_data["rho_code"]
-        * Rhounit
+        rho_average_code * Rhounit
     )
 
     valid = (
@@ -1657,6 +1688,7 @@ def plot_xy_density_with_fieldlines(
     y_code = data["y_code"]
     rho_code = data["rho_code"]
     B_code = data["B_code"]
+    slab_weight_code = data["slab_weight_code"]
 
     # 重複するx-y座標を平均
     (
@@ -1668,7 +1700,8 @@ def plot_xy_density_with_fieldlines(
         x_code,
         y_code,
         rho_code,
-        B_code
+        B_code,
+        slab_weight_code,
     )
 
     # --------------------------------------------------------
