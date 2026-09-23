@@ -103,7 +103,7 @@ use_rotation      = true  # MMH fitによる円筒回転
 use_radial_inflow = true  # MMH fitによる球対称内向き降着流
 
 # 磁場関連
-bz_microgauss = 3e-20  #磁場Bzの強さ(μG単位) ※3e-20はLstif+14の論文を参考に基準値として選択
+bz_microgauss = 3e-14  #磁場Bzの強さ(μG単位) ※3e-20GはLstif+14の論文を参考に基準値として選択
 eta_ohm  = 0.1  # Ohmic拡散：磁場を散逸・平滑化し、蓄積した磁束を逃がす ※0.1を使うこと
 eta_hall = 0.0   # Hall効果：磁場を散逸させず、磁場の構造・向きを変化させる
 eta_ad   = 0.0   # 両極性拡散：弱電離ガス中で中性粒子と磁場を相対的に滑らせる
