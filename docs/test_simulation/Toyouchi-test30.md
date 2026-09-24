@@ -55,7 +55,7 @@ ERROR: Athena++/MPI terminated abnormally. See /work/beta/aida/results/Toyouchi-
 
 ## 7.結果・考察等
 計算時間だけTakasao+22に合わせても意味ないとのことなので、計算途中で止めた。
-役に立つデータではないと思うが、念の為残しておく。
+役に立つデータではないので、削除。
 
 ## 8.備考
 VTKファイルはすべて削除
