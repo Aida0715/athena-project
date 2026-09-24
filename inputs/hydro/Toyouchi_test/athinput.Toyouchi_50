@@ -1,0 +1,106 @@
+<comment>
+problem   = Toyouchi test
+reference = 
+configure = --prob=Toyouchi --grav=mg/fft (-fft)
+
+<job>
+problem_id = Toyouchi    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 0.439       # time increment between outputs
+
+<output2>
+file_type  = vtk        # Binary data dump
+variable   = prim,gr_nfw,gr_star,gself_x,gself_y,gself_z,apres_x,apres_y,apres_z,amag_x,amag_y,amag_z       # variables to be output
+dt         = 0.4386       # time increment between outputs
+ghost_zones= false
+
+<output3>
+file_type = rst
+dt        = 8.77
+
+<time>
+cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1      # cycle limit for short tests
+tlim       = 43.86       # time limit (t=1 is about 1.14 kyr)
+integrator  = vl2       # time integration algorithm
+xorder      = 2         # order of spatial reconstruction
+ncycle_out  = 1         # interval for stdout summary info
+
+<mesh>
+nx1        = 40         # Number of zones in X1-direction
+x1min      = -224        # minimum value of X1 ~10^5au
+x1max      = 224         # maximum value of X1 ~10^5au
+ix1_bc     = outflow   # inner-X1 boundary flag
+ox1_bc     = outflow   # outer-X1 boundary flag
+
+nx2        = 40         # Number of zones in X2-direction
+x2min      = -224        # minimum value of X2 ~10^5au
+x2max      = 224         # maximum value of X2 ~10^5au
+ix2_bc     = outflow   # inner-X2 boundary flag
+ox2_bc     = outflow   # outer-X2 boundary flag
+
+nx3        = 40         # Number of zones in X3-direction
+x3min      = -224        # minimum value of X3 ~10^5au
+x3max      = 224         # maximum value of X3 ~10^5au
+ix3_bc     = outflow   # inner-X3 boundary flag
+ox3_bc     = outflow   # outer-X3 boundary flag
+
+#SMR
+refinement = static
+<refinement1>
+x1min = -4.3
+x1max =  4.3
+x2min = -4.3
+x2max =  4.3
+x3min = -4.3
+x3max =  4.3
+level = 5
+
+
+<meshblock>
+nx1        = 8
+nx2        = 8
+nx3        = 8
+
+<hydro>
+gamma           = 1.001            # gamma = C_p/C_v ~等温
+iso_sound_speed = 0.707          # rb=2*L0, hence cs_code=1/sqrt(2)
+dfloor          = 1.0e-6
+
+<gravity>
+mgmode          = FMG
+threshold       = 0.0
+mporder         = 2
+ix1_bc          = multipole
+ox1_bc          = multipole
+ix2_bc          = multipole
+ox2_bc          = multipole
+ix3_bc          = multipole
+ox3_bc          = multipole
+
+<problem>
+# sink関連
+use_sink                  = true
+r_sink_au                 = 1000.0
+sink_rho_floor            = 6.3e-2  #Wise+19(fig.4)より
+sink_no_outflow_cells     = 1.0
+sink_refine_buffer_factor = 1.0
+
+
+mstar_init          = 1.0  # 初期中心星質量(code mass = 約2 Msun)
+use_central_gravity = true
+use_nfw_gravity     = true
+epsilon = 0.210  # gravitational softening; preserves the previous physical length
+grav_const = 1.0
+use_rotation      = true  # MMH fitによる円筒回転
+use_radial_inflow = true  # MMH fitによる球対称内向き降着流
+
+# 磁場関連
+bz_microgauss = 3e-5  #磁場Bzの強さ(μG単位) ※3e-20Gと3e-11GはLstif+14の論文を参考に基準値として選択
+eta_ohm  = 0.1  # Ohmic拡散：磁場を散逸・平滑化し、蓄積した磁束を逃がす ※0.1を使うこと
+eta_hall = 0.0   # Hall効果：磁場を散逸させず、磁場の構造・向きを変化させる
+eta_ad   = 0.0   # 両極性拡散：弱電離ガス中で中性粒子と磁場を相対的に滑らせる
+
+
