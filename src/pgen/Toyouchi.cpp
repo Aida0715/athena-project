@@ -19,7 +19,6 @@
 #include <cstdio>     // fopen(), fprintf(), freopen()
 #include <iostream>   // endl
 #include <sstream>    // stringstream
-#include <stdexcept>  // runtime_error
 #include <string>     // c_str()
 #include <fstream>    // 追加
 #include <vector>     // 追加
@@ -52,25 +51,11 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons,
                     AthenaArray<Real> &cons_scalar);
 
-int RefinementCondition(MeshBlock *pmb); // AMRのリファインメント宣言
-
 Real SinkHistory(MeshBlock *pmb, int iout); // hstファイルへ中心星質量・降着率を出力
-
-Real SinkCFLSignalSpeed(MeshBlock *pmb, int k, int j, int i,
-                        CoordinateDirection dir, Real physical_signal_speed);
 
 namespace {
 // with functions A1,2,3 which compute vector potentials
 Real cs2, gam, gm1, gconst;
-
-// AMR関連のグローバル変数（RefinementCondition関数で使用）
-bool use_jeans_refine = true;   // Jeans長ベースのリファインを使用するか
-bool use_grad_refine = false;   // 密度勾配ベースのリファインを使用するか
-Real jeans_cells = 8.0;         // Jeans長を何セルで解像するか
-Real refine_thr = 0.3;          // 密度勾配の閾値（use_grad_refine=true時)
-Real derefine_thr = 0.1;
-// 動的AMRを許可する中心からの半径 [code length]
-Real amr_radius = 0.0;
 
 // rotation parameters
 bool use_radial_inflow = true;  // radial velocity
@@ -110,30 +95,11 @@ bool use_sink = true;
 Real r_sink = 0.0;
 
 // シンク内部に残す密度フロア
-Real sink_rho_floor = 1.16e-8;
-
-// sink内部で許容するAlfven速度の上限 [code velocity]
-// <= 0 の場合はAlfven速度制限を使用しない
-Real sink_va_cap = 10.0;
-
-// 実験用：sink深部でCFL評価にだけ使用するAlfven速度上限 [code velocity]
-// 実際のMHD flux/Riemann solverの波速は変更しないため、0以下を通常設定とする。
-Real sink_cfl_va_cap = 0.0;
-
-// CFL上限を適用する半径をr_sinkに対する比で指定する。
-// デフォルト1.0ではsink内部の全セルに適用する。
-Real sink_cfl_cap_radius_factor = 1.0;
-
-// 1セルの物理CFLに対して許す最大タイムステップ緩和倍率。
-// 1以下ならCFL違反を許さない。実験時も1.2--1.5程度を推奨。
-Real sink_cfl_max_relax = 1.0;
+Real sink_rho_floor = 6.3e-2;
 
 // シンク表面の外側で逆流を抑制する幅
 // 各セルで sink_no_outflow_cells * dx として使用
 Real sink_no_outflow_cells = 1.0;
-
-// AMRで強制的に細分化するシンク外側の幅
-Real sink_refine_buffer = 1.0;
 
 // ===== sink diagnostic data =====
 //
@@ -153,7 +119,7 @@ enum SinkDataIndex {
   // [code mass / code time]
   SINK_MDOT_RESET = 2,
 
-  // Alfven速度floorにより人工的に追加した質量率
+  // 通常の密度floorにより人工的に追加した質量率
   // 中心星質量には加えない診断量
   // [code mass / code time]
   SINK_MDOT_FLOOR = 3,
@@ -170,20 +136,17 @@ enum SinkDataIndex {
   SINK_MRESET_CUM = 6,
 
   // density floorで人工的に追加した累積質量 [code mass]
-  // 通常floorとAlfven速度floorの両方を含む
+  // 通常の密度floorによる追加分
   SINK_MFLOOR_CUM = 7,
 
-  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
-  SINK_MMAGFLOOR = 8,
-
   // sink内部の最大Alfven速度 [code velocity]
-  SINK_VA_MAX = 9,
+  SINK_VA_MAX = 8,
 
   // sink内部の最大磁場強度 [code magnetic field]
-  SINK_B_MAX = 10,
+  SINK_B_MAX = 9,
 
   // 配列要素数
-  NSINK_DATA = 11
+  NSINK_DATA = 10
 };
 
 // ===== magnetic field =====
@@ -292,46 +255,11 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
    
   // シンク領域内の密度フロア
   sink_rho_floor =
-      pin->GetOrAddReal("problem", "sink_rho_floor", 1.16e-8);
-
-  // sink内部のAlfven速度上限 [code velocity]
-  // vA = |B|/sqrt(rho) <= sink_va_cap となるように数値的密度floorを調整する。
-  // 0以下なら磁場依存のdensity floorを使用しない。
-  sink_va_cap =
-      pin->GetOrAddReal("problem", "sink_va_cap", 10.0);
-
-  // 実験用のCFL限定Alfven速度上限。密度・磁場・MHD fluxは変更しない。
-  sink_cfl_va_cap =
-      pin->GetOrAddReal("problem", "sink_cfl_va_cap", 0.0);
-  sink_cfl_cap_radius_factor = pin->GetOrAddReal(
-      "problem", "sink_cfl_cap_radius_factor", 1.0);
-  sink_cfl_max_relax =
-      pin->GetOrAddReal("problem", "sink_cfl_max_relax", 1.0);
-
-  if (sink_cfl_cap_radius_factor < 0.0
-      || sink_cfl_cap_radius_factor > 1.0) {
-    std::stringstream msg;
-    msg << "### FATAL ERROR: sink_cfl_cap_radius_factor must be in [0,1]"
-        << std::endl;
-    ATHENA_ERROR(msg);
-  }
-  if (sink_cfl_max_relax < 1.0) {
-    std::stringstream msg;
-    msg << "### FATAL ERROR: sink_cfl_max_relax must be >= 1" << std::endl;
-    ATHENA_ERROR(msg);
-  }
-  if (sink_cfl_va_cap > 0.0 && use_sink) {
-    EnrollUserCFLSignalSpeedFunction(SinkCFLSignalSpeed);
-  }
+      pin->GetOrAddReal("problem", "sink_rho_floor", 6.3e-2);
 
   // シンク表面で外向き流を禁止するセル数
   sink_no_outflow_cells =
       pin->GetOrAddReal("problem", "sink_no_outflow_cells", 1.0);
-
-  // シンク半径に対する外側バッファの比率
-  Real sink_refine_buffer_factor =
-      pin->GetOrAddReal("problem", "sink_refine_buffer_factor", 1.0);
-  sink_refine_buffer = sink_refine_buffer_factor * r_sink;
 
   // 中心星の初期質量（２M_solar）
   Real mstar_init =
@@ -369,9 +297,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // density floorで人工的に追加した累積質量 [code mass]
   ruser_mesh_data[0](SINK_MFLOOR_CUM) = 0.0;
 
-  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
-  ruser_mesh_data[0](SINK_MMAGFLOOR) = 0.0;
-
   // sink内部の最大Alfven速度 [code velocity]
   ruser_mesh_data[0](SINK_VA_MAX) = 0.0;
 
@@ -406,7 +331,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       "Mdot_reset"
   );
 
-  // Alfven速度floorを満たすため人工的に追加した質量率
+  // 通常の密度floorにより人工的に追加した質量率
   // [code mass / code time]
   EnrollUserHistoryOutput(
       3,
@@ -431,14 +356,11 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // density floorで人工的に追加した累積質量 [code mass]
   EnrollUserHistoryOutput(7, SinkHistory, "Mfloor_cum");
 
-  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
-  EnrollUserHistoryOutput(8, SinkHistory, "Msink_magfloor");
-
   // sink内部の最大Alfven速度 [code velocity]
-  EnrollUserHistoryOutput(9, SinkHistory, "Va_max_sink");
+  EnrollUserHistoryOutput(8, SinkHistory, "Va_max_sink");
 
   // sink内部の最大磁場強度 [code magnetic field]
-  EnrollUserHistoryOutput(10, SinkHistory, "Bmax_sink");
+  EnrollUserHistoryOutput(9, SinkHistory, "Bmax_sink");
 
   // 初期設定をログに表示
   if (Globals::my_rank == 0) {
@@ -448,15 +370,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
         << "  r_sink           = " << r_sink << " code units" << std::endl
         << "  r_sink           = " << r_sink_au << " AU" << std::endl
         << "  rho floor        = " << sink_rho_floor << std::endl
-        << "  initial Mstar    = " << mstar_init << " code units" << std::endl
-        << "  Alfven speed cap = " << sink_va_cap << " code velocity"
-        << std::endl
-        << "  EXPERIMENTAL CFL-only Va cap = " << sink_cfl_va_cap
-        << " code velocity" << std::endl
-        << "  CFL-cap radius   = " << sink_cfl_cap_radius_factor
-        << " r_sink" << std::endl
-        << "  max CFL relax    = " << sink_cfl_max_relax
-        << std::endl;
+        << "  initial Mstar    = " << mstar_init << " code units" << std::endl;
   }
 
   // 中心星重力のON,OFF読み込み
@@ -506,144 +420,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     SetGravitationalConstant(gconst);
   }
 
-  // AMR関連の設定
-  if (adaptive) {
-    const Real amr_radius_au =
-    pin->GetOrAddReal("problem", "amr_radius_au", 2.0e4);
-
-    // AMR有効領域の設定
-    if (amr_radius_au <= 0.0) {
-      throw std::runtime_error(
-          "problem/amr_radius_au must be positive");
-    }
-
-    amr_radius = amr_radius_au * AU / Lunit;
-
-    if (Globals::my_rank == 0) {
-      std::cout << "AMR: refinement restricted to r < "
-                << amr_radius_au << " AU"
-                << " (code radius = " << amr_radius << ")"
-                << std::endl;
-    }
-
-    // AMRリファイン方式の選択（入力ファイルから読み込み）
-    // デフォルト：Jeans長ベースのリファインを使用（自己重力系では必須）
-    bool jeans_refine_input =
-        pin->GetOrAddBoolean("problem", "use_jeans_refine", true);
-    bool grad_refine_input =
-        pin->GetOrAddBoolean("problem", "use_grad_refine", false);
-    
-    // 入力パラメータのチェックと警告
-    // 両方OFFの場合はjeansリファインが作動する
-    if (!jeans_refine_input && !grad_refine_input) {
-      std::cout << "WARNING: AMR enabled but no refinement condition specified!" << std::endl;
-      std::cout << "         Enabling Jeans length refinement as default." << std::endl;
-      jeans_refine_input = true;
-    }
-
-    // namespace内の変数へ必ず反映する（falseの場合も古い初期値を残さない）
-    use_jeans_refine = jeans_refine_input;
-    use_grad_refine = grad_refine_input;
-    
-    // Jeans長ベースのリファインが有効な場合のパラメータ読み込み
-    if (jeans_refine_input) {
-      // Jeans長を何セルで解像するか（デフォルト: 8.0）
-      Real jeans_cells = pin->GetOrAddReal("problem", "jeans_cells", 8.0);
-      
-      // 妥当性チェック（Jeans長は最低4セル以上で解像することが推奨）
-      if (jeans_cells < 4.0) {
-        std::cout << "WARNING: jeans_cells = " << jeans_cells << " is too small!" << std::endl;
-        std::cout << "         Setting to 4.0 (minimum recommended value)" << std::endl;
-        jeans_cells = 4.0;
-      }
-      
-      // グローバル変数に保存（RefinementCondition関数で使用）
-      // 注：これらの変数はnamespace内で定義されている必要があります
-      ::jeans_cells = jeans_cells;
-      
-      std::cout << "AMR: Jeans length refinement enabled" << std::endl;
-      std::cout << "     Cells per Jeans length = " << jeans_cells << std::endl;
-    }
-    
-    // 密度勾配ベースのリファインが有効な場合のパラメータ読み込み
-    if (grad_refine_input) {
-      // 密度勾配の閾値（必須パラメータ）
-      refine_thr = pin->GetReal("problem", "refine_thr");
-      derefine_thr = pin->GetOrAddReal("problem", "derefine_thr", 0.1);
-      
-      // グローバル変数に保存
-      ::refine_thr = refine_thr;
-      ::derefine_thr = derefine_thr;
-      
-      std::cout << "AMR: Density gradient refinement enabled" << std::endl;
-      std::cout << "     refine_thr   = " << refine_thr << std::endl;
-      std::cout << "     derefine_thr = " << derefine_thr << std::endl;
-    }
-    
-    // 両方のリファイン方式が有効な場合のメッセージ
-    if (jeans_refine_input && grad_refine_input) {
-      std::cout << "AMR: Using BOTH Jeans length AND density gradient refinement" << std::endl;
-      std::cout << "     (refine if EITHER condition is met)" << std::endl;
-    }
-    
-    // リファイン条件関数の登録
-    EnrollUserRefinementCondition(RefinementCondition);
-
-  }
   return;
-}
-
-//========================================================================================
-//! \fn Real SinkCFLSignalSpeed(...)
-//! \brief Experimental sink-interior modifier of the signal speed used by CFL only
-//!
-//! This function does NOT modify rho, pressure, velocity, magnetic field, MHD fluxes,
-//! or the Riemann-solver eigenvalues.  Consequently a returned value smaller than
-//! physical_signal_speed deliberately violates the physical CFL condition.  Restrict
-//! its use to short validation runs.  By default the cap covers all cells whose
-//! centers lie inside r_sink.  A smaller sink_cfl_cap_radius_factor can restore an
-//! outer physical-CFL buffer.  sink_cfl_max_relax limits the violation factor cell
-//! by cell.
-//========================================================================================
-
-Real SinkCFLSignalSpeed(MeshBlock *pmb, int k, int j, int i,
-                        CoordinateDirection dir, Real physical_signal_speed) {
-  if (!use_sink || sink_cfl_va_cap <= 0.0
-      || sink_cfl_cap_radius_factor <= 0.0
-      || sink_cfl_max_relax <= 1.0) {
-    return physical_signal_speed;
-  }
-
-  const Real x0 = 0.5*(pmb->pmy_mesh->mesh_size.x1min
-                     + pmb->pmy_mesh->mesh_size.x1max);
-  const Real y0 = 0.5*(pmb->pmy_mesh->mesh_size.x2min
-                     + pmb->pmy_mesh->mesh_size.x2max);
-  const Real z0 = 0.5*(pmb->pmy_mesh->mesh_size.x3min
-                     + pmb->pmy_mesh->mesh_size.x3max);
-  const Real x = pmb->pcoord->x1v(i) - x0;
-  const Real y = pmb->pcoord->x2v(j) - y0;
-  const Real z = pmb->pcoord->x3v(k) - z0;
-  const Real radius = std::sqrt(x*x + y*y + z*z);
-  const Real cap_radius = sink_cfl_cap_radius_factor*r_sink;
-  if (radius >= cap_radius) return physical_signal_speed;
-
-  // Directional fluid velocity [code velocity].  The capped fast-speed estimate
-  // sqrt(cs^2 + va_cap^2) is conservative with respect to a prescribed Alfven cap.
-  int velocity_index = IVX;
-  if (dir == X2DIR) velocity_index = IVY;
-  if (dir == X3DIR) velocity_index = IVZ;
-  const Real abs_velocity =
-      std::abs(pmb->phydro->w(velocity_index, k, j, i));
-  const Real capped_fast_speed =
-      std::sqrt(std::max(static_cast<Real>(0.0), cs2)
-                + SQR(sink_cfl_va_cap));
-  const Real capped_signal_speed = abs_velocity + capped_fast_speed;
-
-  // Never enlarge the local timestep by more than sink_cfl_max_relax relative
-  // to the physical cell CFL value, even when the requested Va cap is much lower.
-  const Real relaxation_floor = physical_signal_speed/sink_cfl_max_relax;
-  return std::max(relaxation_floor,
-                  std::min(physical_signal_speed, capped_signal_speed));
 }
 
 //========================================================================================
@@ -917,7 +694,7 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 
 // VTK出力直前に、力の釣り合いを調べるための診断加速度を計算する。
 // これらはcell-centered量の2次中心差分であり、Riemann solverが用いる
-// 離散fluxそのものではない。特にAMR境界・sink境界では微分誤差に注意する。
+  // 離散fluxそのものではない。特に細分化境界・sink境界では微分誤差に注意する。
 void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
   AthenaArray<Real> &w = phydro->w;
   Coordinates *coord = pcoord;
@@ -1006,7 +783,6 @@ void Mesh::UserWorkInLoop() {
     ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
     ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
     ruser_mesh_data[0](SINK_MGAS) = 0.0;
-    ruser_mesh_data[0](SINK_MMAGFLOOR) = 0.0;
     ruser_mesh_data[0](SINK_VA_MAX) = 0.0;
     ruser_mesh_data[0](SINK_B_MAX) = 0.0;
     return;
@@ -1027,9 +803,6 @@ void Mesh::UserWorkInLoop() {
 
   // リセット後にsink内部へ残るガス質量 [code mass]
   Real sink_gas_mass_local = 0.0;
-
-  // 現在sink内部に保持されている磁場依存floor超過質量 [code mass]
-  Real magnetic_floor_mass_local = 0.0;
 
   // sink内部の最大Alfven速度 [code velocity]
   Real va_max_sink_local = 0.0;
@@ -1121,7 +894,7 @@ void Mesh::UserWorkInLoop() {
     AthenaArray<Real> &w = pmb->phydro->w;
 #if MAGNETIC_FIELDS_ENABLED
     // face-centered磁場から作られたcell-centered磁場 [code magnetic field]
-    // density floorの評価にだけ使い、磁場自体は変更しない。
+    // 最大Alfven速度と最大磁場強度の診断にだけ使う。
     AthenaArray<Real> &bcc = pmb->pfield->bcc;
 #endif
 
@@ -1147,11 +920,6 @@ void Mesh::UserWorkInLoop() {
             const Real bz = bcc(IB3,k,j,i);  // cell-centered Bz
             b2 = bx*bx + by*by + bz*bz;
 
-            if (sink_va_cap > 0.0) {
-              // vA=|B|/sqrt(rho)<=sink_va_capに必要な最低密度 [code density]
-              const Real rho_va_floor = b2/SQR(sink_va_cap);
-              rho_target = std::max(rho_target, rho_va_floor);
-            }
 #endif
 
             const Real cell_volume = pmb->pcoord->GetCellVolume(k,j,i);
@@ -1163,9 +931,6 @@ void Mesh::UserWorkInLoop() {
             b_max_sink_local = std::max(b_max_sink_local, bmag);
             va_max_sink_local = std::max(va_max_sink_local, va_after_reset);
 
-            // 通常のsink_rho_floorを超えて磁場依存floorが保持している質量。
-            magnetic_floor_mass_local += std::max(
-                rho_target-sink_rho_floor, static_cast<Real>(0.0))*cell_volume;
 #endif
 
             if (rho_old > rho_target) {
@@ -1216,11 +981,10 @@ void Mesh::UserWorkInLoop() {
   }
 
   // 全MPI rankで、加算可能なsink診断量を合算する。
-  Real sink_data[5] = {flux_mass_local, reset_removed_mass_local,
-                       floor_added_mass_local, sink_gas_mass_local,
-                       magnetic_floor_mass_local};
+  Real sink_data[4] = {flux_mass_local, reset_removed_mass_local,
+                       floor_added_mass_local, sink_gas_mass_local};
 #ifdef MPI_PARALLEL
-  MPI_Allreduce(MPI_IN_PLACE, sink_data, 5, MPI_ATHENA_REAL, MPI_SUM,
+  MPI_Allreduce(MPI_IN_PLACE, sink_data, 4, MPI_ATHENA_REAL, MPI_SUM,
                 MPI_COMM_WORLD);
 #endif
 
@@ -1228,7 +992,6 @@ void Mesh::UserWorkInLoop() {
   const Real reset_removed_mass_global = sink_data[1];
   const Real floor_added_mass_global = sink_data[2];
   const Real sink_gas_mass_global = sink_data[3];
-  const Real magnetic_floor_mass_global = sink_data[4];
 
   // 最大値を取るsink診断量はMPI_MAXで集約する。
   Real sink_max_data[2] = {va_max_sink_local, b_max_sink_local};
@@ -1259,7 +1022,6 @@ void Mesh::UserWorkInLoop() {
     ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
   }
   ruser_mesh_data[0](SINK_MGAS) = sink_gas_mass_global;
-  ruser_mesh_data[0](SINK_MMAGFLOOR) = magnetic_floor_mass_global;
   ruser_mesh_data[0](SINK_VA_MAX) = va_max_sink_global;
   ruser_mesh_data[0](SINK_B_MAX) = b_max_sink_global;
 
@@ -1270,7 +1032,6 @@ void Mesh::UserWorkInLoop() {
               << " Mdot_reset=" << ruser_mesh_data[0](SINK_MDOT_RESET)
               << " Mdot_floor=" << ruser_mesh_data[0](SINK_MDOT_FLOOR)
               << " Msink_gas=" << ruser_mesh_data[0](SINK_MGAS)
-              << " Msink_magfloor=" << ruser_mesh_data[0](SINK_MMAGFLOOR)
               << " Va_max_sink=" << ruser_mesh_data[0](SINK_VA_MAX)
               << " Bmax_sink=" << ruser_mesh_data[0](SINK_B_MAX)
               << std::endl;
@@ -1289,159 +1050,4 @@ Real SinkHistory(MeshBlock *pmb, int iout) {
     return pmb->pmy_mesh->ruser_mesh_data[0](iout);
   }
   return 0.0;
-}
-
-int RefinementCondition(MeshBlock *pmb) {
-
-  bool need_refine = false;
-  bool need_derefine = true;
-
-  // シンク周辺の強制リファイン（シンク表面周辺ではセルを細かくしておきたい）
-  const Real x0 =
-      0.5 * (pmb->pmy_mesh->mesh_size.x1min
-           + pmb->pmy_mesh->mesh_size.x1max);
-  const Real y0 =
-      0.5 * (pmb->pmy_mesh->mesh_size.x2min
-           + pmb->pmy_mesh->mesh_size.x2max);
-  const Real z0 =
-      0.5 * (pmb->pmy_mesh->mesh_size.x3min
-           + pmb->pmy_mesh->mesh_size.x3max);
-
-  // セル中心ではなく、MeshBlockとシンク球の最短距離で判定する。
-  // これにより、基本格子がシンクより粗くても中心ブロックの細分化を開始できる。
-  const Real xmin = pmb->block_size.x1min - x0;
-  const Real xmax = pmb->block_size.x1max - x0;
-  const Real ymin = pmb->block_size.x2min - y0;
-  const Real ymax = pmb->block_size.x2max - y0;
-  const Real zmin = pmb->block_size.x3min - z0;
-  const Real zmax = pmb->block_size.x3max - z0;
-
-  Real dx_block = 0.0;
-  Real dy_block = 0.0;
-  Real dz_block = 0.0;
-
-  if (xmin > 0.0) {
-    dx_block = xmin;
-  } else if (xmax < 0.0) {
-    dx_block = -xmax;
-  }
-  if (ymin > 0.0) {
-    dy_block = ymin;
-  } else if (ymax < 0.0) {
-    dy_block = -ymax;
-  }
-  if (zmin > 0.0) {
-    dz_block = zmin;
-  } else if (zmax < 0.0) {
-    dz_block = -zmax;
-  }
-
-  const Real block_min_radius =
-      std::sqrt(dx_block*dx_block + dy_block*dy_block + dz_block*dz_block);
-
-  // AMR許可領域   
-  const bool block_intersects_amr_region =
-      block_min_radius < amr_radius;
-  // AMR許可領域と全く交差しないMeshBlockは基本レベルへ戻す。
-  if (!block_intersects_amr_region) {
-    return -1;
-  }
-
-  const bool sink_region_in_block =
-      use_sink && block_min_radius < r_sink + sink_refine_buffer;
-
-  if (sink_region_in_block) {
-    need_refine = true;
-    need_derefine = false;
-  }
-
-  Real cs_iso = std::sqrt(cs2);
-
-  Real gradmax = 0.0;
-  Real njmin   = 1e30;
-
-  for (int k = pmb->ks+1; k <= pmb->ke-1; ++k) {
-    for (int j = pmb->js+1; j <= pmb->je-1; ++j) {
-      for (int i = pmb->is+1; i <= pmb->ie-1; ++i) {
-
-        // セル判定をAMR許可領域内に限る
-        const Real x = pmb->pcoord->x1v(i) - x0;
-        const Real y = pmb->pcoord->x2v(j) - y0;
-        const Real z = pmb->pcoord->x3v(k) - z0;
-        const Real r_cell = std::sqrt(x*x + y*y + z*z);
-
-        if (r_cell >= amr_radius) {
-          continue;
-        }
-
-        Real rho = pmb->phydro->w(IDN, k, j, i);
-
-        Real rho_safe = std::max(rho, 1e-20);
-
-        // 音速
-        Real cs = (NON_BAROTROPIC_EOS)
-                    ? std::sqrt(pmb->phydro->w(IPR, k, j, i) / rho_safe)
-                    : cs_iso;
-
-        // ===== Jeans判定（collapse.cpp風）=====
-        Real dx = std::min({
-          pmb->pcoord->dx1v(i),
-          pmb->pcoord->dx2v(j),
-          pmb->pcoord->dx3v(k)
-        });
-
-        Real nj = cs / std::sqrt(rho_safe);
-        nj *= (2.0 * M_PI / dx);
-
-        // ★minは記録だけ（derefine用）
-        njmin = std::min(njmin, nj);
-
-        // ★これが超重要：局所で即refine
-        if (use_jeans_refine && nj < jeans_cells) {
-          need_refine = true;
-        }
-
-        // ===== 密度勾配 =====
-        if (use_grad_refine) {
-          const Real grad_x = 0.5 * std::abs(
-            pmb->phydro->w(IDN, k, j, i+1) -
-            pmb->phydro->w(IDN, k, j, i-1)
-          ) / rho_safe;
-
-          const Real grad_y = 0.5 * std::abs(
-            pmb->phydro->w(IDN, k, j+1, i) -
-            pmb->phydro->w(IDN, k, j-1, i)
-          ) / rho_safe;
-
-          const Real grad_z = 0.5 * std::abs(
-            pmb->phydro->w(IDN, k+1, j, i) -
-            pmb->phydro->w(IDN, k-1, j, i)
-          ) / rho_safe;
-
-          const Real grad = std::max({grad_x, grad_y, grad_z});
-          gradmax = std::max(gradmax, grad);
-        }
-      }
-    }
-  }
-
-  // ===== gradによるrefine =====
-  if (use_grad_refine && gradmax > refine_thr) {
-    need_refine = true;
-  }
-
-  // ===== derefine条件（少し緩め）=====
-  if (use_jeans_refine) {
-    if (njmin < jeans_cells * 1.2) {
-      need_derefine = false;
-    }
-  }
-
-  if (use_grad_refine && gradmax > derefine_thr) {  // gradによるderefine（ヒステリシス）
-    need_derefine = false;
-  }
-
-  if (need_refine) return 1;  // 細かくする
-  else if (need_derefine) return -1;  // 粗くする
-  else return 0;  // そのまま現状維持
 }
