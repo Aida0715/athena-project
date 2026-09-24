@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # commit: cd2fe2c //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# Toyouchi+23の設定に磁場Bz=1μGを入れてテスト
+# Toyouchi+23の設定に磁場Bz=3μGを入れてテスト
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
