@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # commit: 8331c2e //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# クランプがメッシュブロック由来なのかどうかを確かめるため、SMRをOFF、磁場なし、メッシュを1000^3にして解像度あげ、tlim=17.54の短時間テスト
+# クランプがメッシュブロック由来なのかどうかを確かめるため、SMRをOFF、磁場なし、r_sink=25000AU、tlim=17.54の短時間テスト
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
