@@ -29,19 +29,19 @@ xorder      = 2         # order of spatial reconstruction
 ncycle_out  = 1         # interval for stdout summary info
 
 <mesh>
-nx1        = 1000         # Number of zones in X1-direction
+nx1        = 40         # Number of zones in X1-direction
 x1min      = -224        # minimum value of X1 ~10^5au
 x1max      = 224         # maximum value of X1 ~10^5au
 ix1_bc     = outflow   # inner-X1 boundary flag
 ox1_bc     = outflow   # outer-X1 boundary flag
 
-nx2        = 1000         # Number of zones in X2-direction
+nx2        = 40         # Number of zones in X2-direction
 x2min      = -224        # minimum value of X2 ~10^5au
 x2max      = 224         # maximum value of X2 ~10^5au
 ix2_bc     = outflow   # inner-X2 boundary flag
 ox2_bc     = outflow   # outer-X2 boundary flag
 
-nx3        = 1000         # Number of zones in X3-direction
+nx3        = 40         # Number of zones in X3-direction
 x3min      = -224        # minimum value of X3 ~10^5au
 x3max      = 224         # maximum value of X3 ~10^5au
 ix3_bc     = outflow   # inner-X3 boundary flag
@@ -83,7 +83,7 @@ ox3_bc          = multipole
 <problem>
 # sink関連
 use_sink                  = true
-r_sink_au                 = 1000.0
+r_sink_au                 = 25000.0
 sink_rho_floor            = 6.3e-2  #Wise+19(fig.4)より
 sink_no_outflow_cells     = 1.0
 sink_refine_buffer_factor = 1.0
