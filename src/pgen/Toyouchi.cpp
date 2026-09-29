@@ -23,6 +23,7 @@
 #include <fstream>    // 追加
 #include <vector>     // 追加
 #include <utility>    // 追加
+#include <cstdint>    // white noise
 
 // Athena++ headers
 #include "../athena.hpp"
@@ -56,6 +57,39 @@ Real SinkHistory(MeshBlock *pmb, int iout); // hstファイルへ中心星質量
 namespace {
 // with functions A1,2,3 which compute vector potentials
 Real cs2, gam, gm1, gconst;
+
+// 初期密度ノイズ
+bool use_density_noise = false;
+Real density_noise_percent = 0.0;
+int density_noise_seed = 42;
+
+// 64bit整数を混ぜるハッシュ関数。
+// unsigned整数のオーバーフローは意図した動作。
+std::uint64_t DensityNoiseHash(std::uint64_t value) {
+  value += 0x9e3779b97f4a7c15ULL;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
+
+// セルごとの擬似乱数を約[-1, 1)の範囲で返す。
+Real DensityNoiseValue(std::uint64_t ix,
+                       std::uint64_t iy,
+                       std::uint64_t iz,
+                       int refinement_level) {
+  std::uint64_t h =
+      DensityNoiseHash(static_cast<std::uint64_t>(density_noise_seed));
+
+  h = DensityNoiseHash(h ^ static_cast<std::uint64_t>(refinement_level));
+  h = DensityNoiseHash(h ^ ix);
+  h = DensityNoiseHash(h ^ iy);
+  h = DensityNoiseHash(h ^ iz);
+
+  const double uniform01 =
+      static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0);
+
+  return static_cast<Real>(2.0 * uniform01 - 1.0);
+}
 
 // rotation parameters
 bool use_radial_inflow = true;  // radial velocity
@@ -240,6 +274,31 @@ Real VrMMHCode(Real r_code) {
 
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
+
+
+  // ===== 初期密度ノイズの設定 =====
+  use_density_noise =
+      pin->GetOrAddBoolean("problem", "use_density_noise", false);
+
+  density_noise_percent =
+      pin->GetOrAddReal("problem", "density_noise_percent", 0.0);
+
+  density_noise_seed =
+      pin->GetOrAddInteger("problem", "density_noise_seed", 42);
+
+  if (!std::isfinite(density_noise_percent)
+      || density_noise_percent < 0.0
+      || density_noise_percent >= 100.0) {
+    std::stringstream msg;
+    msg << "density_noise_percent must satisfy 0 <= value < 100.";
+    ATHENA_ERROR(msg);
+  }
+
+  if (density_noise_seed < 0) {
+    std::stringstream msg;
+    msg << "density_noise_seed must be non-negative.";
+    ATHENA_ERROR(msg);
+  }
 
   epsilon_soft = pin->GetOrAddReal("problem","epsilon",0.5);
   gconst = pin->GetOrAddReal("problem","grav_const",1.0);
@@ -495,6 +554,39 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           // 100000 AUより外側：fit最外密度を一様に配置
           rho_final = rho_outer;
         }
+
+       // 初期密度にセルごとのWhite noiseを加える。
+       // シンク内部は既存の固定密度を維持する。
+       if (use_density_noise
+           && density_noise_percent > 0.0
+           && !(use_sink && r_sph < r_sink)) {
+
+         // この解像度レベルにおける領域全体のセル番号。
+         // ローカルなi,j,kだけを使わず、ブロック位置も反映する。
+         const std::uint64_t ix =
+             static_cast<std::uint64_t>(loc.lx1)
+             * static_cast<std::uint64_t>(block_size.nx1)
+             + static_cast<std::uint64_t>(i - is);
+
+         const std::uint64_t iy =
+             static_cast<std::uint64_t>(loc.lx2)
+             * static_cast<std::uint64_t>(block_size.nx2)
+             + static_cast<std::uint64_t>(j - js);
+
+         const std::uint64_t iz =
+             static_cast<std::uint64_t>(loc.lx3)
+             * static_cast<std::uint64_t>(block_size.nx3)
+             + static_cast<std::uint64_t>(k - ks);
+
+         const int refinement_level =
+             loc.level - pmy_mesh->root_level;
+
+         const Real noise =
+             DensityNoiseValue(ix, iy, iz, refinement_level);
+
+         rho_final *=
+             1.0 + 0.01 * density_noise_percent * noise;
+       }
 
         P_final = rho_final * cs * cs;
 
