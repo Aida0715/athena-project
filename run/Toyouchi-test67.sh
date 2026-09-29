@@ -2,8 +2,8 @@
 
 set -Eeuo pipefail
 
-# commit: 8331c2e //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# クランプがメッシュブロック由来なのかどうかを確かめるため、SMRをON、磁場なし、シンクなし、計算時間は50kyr
+# commit: 3a6d19b //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
+# White noiseを入れた、SMRをON、磁場なし、シンクあり、White noise1%、tlim=17.54の短時間テスト用
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
