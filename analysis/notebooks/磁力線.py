@@ -1171,7 +1171,8 @@ import numpy as np
 import pyvista as pv
 import matplotlib.pyplot as plt
 
-from scipy.interpolate import griddata
+from scipy.interpolate import LinearNDInterpolator
+from scipy.spatial import Delaunay, cKDTree
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter
 
@@ -1593,6 +1594,42 @@ def average_duplicate_xy(
     )
 
 
+def prepare_xy_slice(step):
+    """
+    1時刻分のVTKを読み、z方向平均と同一(x,y)座標の統合を1回だけ行う。
+
+    この返値を全体図と1/10ズーム図で共用することで、
+    np.uniqueの大きな一時配列を同一時刻に繰り返し作らない。
+    """
+
+    raw = load_xy_slice(step)
+
+    x_code, y_code, rho_code, B_code = average_duplicate_xy(
+        raw["x_code"],
+        raw["y_code"],
+        raw["rho_code"],
+        raw["B_code"],
+        raw["slab_weight_code"],
+    )
+
+    prepared = {
+        "step": raw["step"],
+        "time_code": raw["time_code"],
+        "x_code": x_code,
+        "y_code": y_code,
+        "rho_code": rho_code,
+        "B_code": B_code,
+        "domain_xmin_code": raw["domain_xmin_code"],
+        "domain_xmax_code": raw["domain_xmax_code"],
+        "domain_ymin_code": raw["domain_ymin_code"],
+        "domain_ymax_code": raw["domain_ymax_code"],
+        "xy_is_averaged": True,
+    }
+
+    del raw
+    return prepared
+
+
 # ============================================================
 # 8. 全出力で共通の密度カラースケールを決める
 # ============================================================
@@ -1606,15 +1643,8 @@ density_samples = []
 rho_vmax_global = -np.inf
 
 for n, step in enumerate(timesteps):
-    slice_data = load_xy_slice(step)
-
-    _, _, rho_average_code, _ = average_duplicate_xy(
-        slice_data["x_code"],
-        slice_data["y_code"],
-        slice_data["rho_code"],
-        slice_data["B_code"],
-        slice_data["slab_weight_code"],
-    )
+    slice_data = prepare_xy_slice(step)
+    rho_average_code = slice_data["rho_code"]
 
     rho_cgs = (
         rho_average_code * Rhounit
@@ -1741,7 +1771,7 @@ def plot_xy_density_with_fieldlines(
 
     # prepared_dataを渡した場合、全体図とズーム図でVTK読込を共有する。
     data = (
-        load_xy_slice(step)
+        prepare_xy_slice(step)
         if prepared_data is None
         else prepared_data
     )
@@ -1750,21 +1780,16 @@ def plot_xy_density_with_fieldlines(
     y_code = data["y_code"]
     rho_code = data["rho_code"]
     B_code = data["B_code"]
-    slab_weight_code = data["slab_weight_code"]
 
-    # 重複するx-y座標を平均
-    (
-        x_code,
-        y_code,
-        rho_code,
-        B_code
-    ) = average_duplicate_xy(
-        x_code,
-        y_code,
-        rho_code,
-        B_code,
-        slab_weight_code,
-    )
+    if not data.get("xy_is_averaged", False):
+        # 旧形式のprepared_dataが渡された場合の互換処理。
+        x_code, y_code, rho_code, B_code = average_duplicate_xy(
+            x_code,
+            y_code,
+            rho_code,
+            B_code,
+            data["slab_weight_code"],
+        )
 
     # --------------------------------------------------------
     # コード単位からCGS・表示単位へ変換
@@ -1797,18 +1822,6 @@ def plot_xy_density_with_fieldlines(
         B_code[:, 1]
         * Bunit
         * 1.0e6
-    )
-
-    Bnormal_microG = (
-        B_code[:, 2]
-        * Bunit
-        * 1.0e6
-    )
-
-    Bmag_microG = np.sqrt(
-        Bx_microG**2
-        + Bnormal_microG**2
-        + By_microG**2
     )
 
     time_code = data["time_code"]
@@ -1903,6 +1916,16 @@ def plot_xy_density_with_fieldlines(
             f"y range={ymin:.3e} to {ymax:.3e} AU"
         )
 
+    # 情報ボック用の値は補間前にスカラー化し、
+    # 全セル分の |B| 配列を保持しない。
+    Bmax_visible = float(
+        np.max(np.linalg.norm(B_code[mask], axis=1))
+        * Bunit
+        * 1.0e6
+    )
+    Bxmax_visible = float(np.max(np.abs(Bx_microG[mask])))
+    Bymax_visible = float(np.max(np.abs(By_microG[mask])))
+
     # --------------------------------------------------------
     # 規則格子
     # --------------------------------------------------------
@@ -1924,86 +1947,51 @@ def plot_xy_density_with_fieldlines(
         y_grid
     )
 
-    source_points = np.column_stack([
-        x_AU[mask],
-        y_AU[mask]
-    ])
+    source_points = np.empty((number_of_source_points, 2), dtype=np.float64)
+    source_points[:, 0] = x_AU[mask]
+    source_points[:, 1] = y_AU[mask]
 
-    # --------------------------------------------------------
-    # 密度をlog空間で補間
-    # --------------------------------------------------------
+    # rho, Bx, Byを1つの値配列にまとめ、Delaunay分割を1回だけ作る。
+    # 密度は従来どおりlog10空間で線形補間するため、描画精度は変わらない。
+    source_values = np.empty((number_of_source_points, 3), dtype=np.float64)
+    source_values[:, 0] = np.log10(rho_cgs[mask])
+    source_values[:, 1] = Bx_microG[mask]
+    source_values[:, 2] = By_microG[mask]
 
-    log_rho_source = np.log10(
-        rho_cgs[mask]
+    # ここから先はsource_points/source_valuesだけを使う。
+    # 単位変換後の全セル配列をQhullと同時に保持しない。
+    del x_AU, y_AU, rho_cgs, Bx_microG, By_microG, mask
+
+    triangulation = Delaunay(source_points)
+    linear_interpolator = LinearNDInterpolator(
+        triangulation,
+        source_values,
+        fill_value=np.nan,
     )
+    interpolated = linear_interpolator(X, Y)
 
-    log_rho_linear = griddata(
-        source_points,
-        log_rho_source,
-        (X, Y),
-        method="linear"
-    )
+    # Delaunay凸包の外側だけを最近傍値で補完する。
+    # 全格子に対するnearest補間配列を3枚作らない。
+    missing = ~np.isfinite(interpolated[..., 0])
+    if np.any(missing):
+        tree = cKDTree(source_points)
+        missing_points = np.empty((np.count_nonzero(missing), 2), dtype=np.float64)
+        missing_points[:, 0] = X[missing]
+        missing_points[:, 1] = Y[missing]
+        _, nearest_indices = tree.query(missing_points, k=1)
+        interpolated[missing, :] = source_values[nearest_indices, :]
+        del nearest_indices, missing_points, tree
 
-    log_rho_nearest = griddata(
-        source_points,
-        log_rho_source,
-        (X, Y),
-        method="nearest"
-    )
+    # 各チャネルを独立配列にし、3成分の親配列を解放可能にする。
+    log_rho_grid = interpolated[..., 0].copy()
+    Bx_grid = interpolated[..., 1].copy()
+    By_grid = interpolated[..., 2].copy()
+    rho_grid = np.power(10.0, log_rho_grid)
 
-    log_rho_grid = np.where(
-        np.isfinite(log_rho_linear),
-        log_rho_linear,
-        log_rho_nearest
-    )
-
-    rho_grid = (
-        10.0**log_rho_grid
-    )
-
-    # --------------------------------------------------------
-    # Bx, Byを補間
-    # --------------------------------------------------------
-
-    Bx_linear = griddata(
-        source_points,
-        Bx_microG[mask],
-        (X, Y),
-        method="linear"
-    )
-
-    By_linear = griddata(
-        source_points,
-        By_microG[mask],
-        (X, Y),
-        method="linear"
-    )
-
-    Bx_nearest = griddata(
-        source_points,
-        Bx_microG[mask],
-        (X, Y),
-        method="nearest"
-    )
-
-    By_nearest = griddata(
-        source_points,
-        By_microG[mask],
-        (X, Y),
-        method="nearest"
-    )
-
-    Bx_grid = np.where(
-        np.isfinite(Bx_linear),
-        Bx_linear,
-        Bx_nearest
-    )
-
-    By_grid = np.where(
-        np.isfinite(By_linear),
-        By_linear,
-        By_nearest
-    )
+    # Qhullの大きな一時構造は描画処理の前に参照を外す。
+    del linear_interpolator, triangulation
+    del source_points, source_values, interpolated, log_rho_grid, missing
+    gc.collect()
 
     Bx_grid = np.nan_to_num(
         Bx_grid,
@@ -2185,19 +2173,6 @@ def plot_xy_density_with_fieldlines(
         linestyle="--"
     )
 
-    # 表示範囲内の磁場最大値
-    Bmax_visible = np.max(
-        Bmag_microG[mask]
-    )
-
-    Bxmax_visible = np.max(
-        np.abs(Bx_microG[mask])
-    )
-
-    Bymax_visible = np.max(
-        np.abs(By_microG[mask])
-    )
-
     # 情報ボックスは通常文字列にして、環境ごとのmathtext差を避ける。
     info = (
         f"Bmax = {Bmax_visible:.3e} μG\n"
@@ -2293,7 +2268,7 @@ for n, step in enumerate(timesteps):
         f"[LOAD {n+1:3d}/{len(timesteps):3d}] "
         f"step={step:05d}"
     )
-    step_data = load_xy_slice(step)
+    step_data = prepare_xy_slice(step)
 
     if need_full:
         print(f"[FULL] Processing step={step:05d}")
