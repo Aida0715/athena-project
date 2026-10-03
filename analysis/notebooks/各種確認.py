@@ -41,6 +41,9 @@ DT_DROP_RATIO = 0.2  # 前記録の20%未満を参考イベントとして保存
 BALANCE_RTOL = 1.0e-5  # HST桁落ちも考慮した整合性検査用
 SLICE_STEPS = None  # None: 初期・中間・最終。番号リストで追加指定可
 SLICE_HALF_WIDTH = None  # None: 領域全体。code長でsink周辺のズーム指定可
+ROOT_CELL_WIDTH = np.array([448/40]*3)  # 実行時の各軸の領域幅/nx。SMR level=0のセル幅
+SINK_NO_OUTFLOW_CELLS = 1.0  # 実行時のsink_no_outflow_cellsと一致させる
+BUFFER_VR_TOL_CGS = 1.e-6  # 外向き速度の判定許容値 [cm/s]。データ自体は丸めない
 PROFILE_BINS = 80  # 初期密度プロファイルの球殻数（対数間隔、中心殻は0から）
 SHOW_PLOTS = True  # Jupyterのセル出力にも図を表示（PNG保存は常に行う）
 
@@ -101,7 +104,14 @@ register('rho_mean', DENSITY_CGS, 'g/cm^3', '最初の保存出力における�
 register('mdot_floor_to_flux', 1., '1', '瞬間のMdot_floor / Mdot_flux。分母0・非有限値は未定義')
 register('mdot_reset_to_floor', 1., '1', '瞬間のMdot_reset / Mdot_floor。分母0・非有限値は未定義')
 
+register('v_max_sink va_max_sink_vtk buffer_vr_max buffer_vr_min buffer_outward_max', VELOCITY_CGS, 'cm/s', 'sink内最大速度・Alfven速度・バッファー内動径速度（外向き正）。保存値をそのまま使用')
+register('buffer_cells buffer_outward_cells', 1., 'count', 'バッファーセル数・許容値を超える外向き速度のセル数')
+register('smr_level_min smr_level_max smr_level_mean', 1., '1', 'root格子を0としたSMRレベル。球殻内最小・最大・体積加重平均')
+
 DIAGNOSTIC_CRITERIA = [
+    ('sink速度', '保存VTKのsink内最大|v|を表示。0は0のまま描画し、微小値への置換や丸めは行わない'),
+    ('バッファー', f'外向きvrの最大値と内向きvr、外向きセル数を表示。vr>{BUFFER_VR_TOL_CGS:g} cm/s: WARN。数値面fluxは未記録でUNKNOWN'),
+    ('SMRレベル', '各軸log2(rootセル幅/実セル幅)が同一整数か検査。球殻内min/max/体積加重平均を表示。root幅は実行時入力に合わせる'),
     ('初期密度プロファイル', '最初の保存出力を使用。t=0以外はWARN。球殻の体積加重平均、空の殻はNaN。合否閾値なし'),
     ('瞬間Mdot比', 'floor/fluxとreset/floorを同じ図に表示。分母0・非有限値はNaN、合否閾値なし'),
     ('実行終了', 'exit_codeが全て0: OK、非0あり: FAIL、記録なし: UNKNOWN'),
@@ -275,10 +285,13 @@ def save_plot(out, name, series, ylabel=None, log=False):
     for ax, (unit, curves) in zip(axes[:,0], grouped.items()):
         for label,t,y in curves:
             ax.plot(t,y,label=label,lw=1)
-        if log:
+        if log and unit != 'cm/s':
             finite = np.concatenate([y[np.isfinite(y) & (y != 0)] for _,_,y in curves])
             if finite.size:
                 ax.set_yscale('symlog',linthresh=max(float(np.min(np.abs(finite)))*.1, np.finfo(float).tiny))
+        if unit == 'cm/s':
+            ax.axhline(0,color='0.5',lw=.6)  # 正確な0をそのまま表示
+            ax.ticklabel_format(axis='y',style='sci',scilimits=(-3,4),useOffset=False)
         ax.set(xlabel='Time [kyr]',ylabel=unit)
         ax.grid(alpha=.25)
         ax.legend(fontsize=8)
@@ -417,7 +430,7 @@ def check_hst(root, out, report):
     write_csv(out/'history_balance.csv', diagnostics)
     for filename, names, source in [
         ('history_mass.png', ['mass','Mstar','Msink_gas'], rows),
-        ('history_sink.png', ['Va_max_sink','Bmax_sink','Mdot_floor','Mdot_reset'], rows),
+        ('history_sink.png', ['Bmax_sink','Mdot_floor','Mdot_reset'], rows),
         ('mass_balance_proxies.png', ['star_identity','sink_proxy','gas_unclosed'], diagnostics),
         ('floor_mass.png', ['floor_added','reset_removed','accreted'], diagnostics),
         ('mdot_ratios.png', ['mdot_floor_to_flux','mdot_reset_to_floor'], rows),
@@ -435,6 +448,7 @@ def check_hst(root, out, report):
     note(report, 'UNKNOWN', '厳密なsink質量収支',
          'sink_proxy=ΔMsink−ΔMflux+ΔMreset−ΔMfloor。Mfluxは各cycleで負値を切り捨てており、符号付きfluxが必要。')
 
+    return rows
 
 # %% VTK検査・断面図の関数
 def block_metrics(path):
@@ -467,7 +481,7 @@ def block_metrics(path):
                   floor_cells_outside=int(np.count_nonzero((rho<=DFLOOR*(1+1e-5)) & ~sink)),
                   sink_target_cells=int(np.count_nonzero(sink & np.isclose(rho,SINK_RHO,rtol=1e-5,atol=0))))
     positions = []
-    for name, values, minimum in [('rho_min',rho,True),('rho_max',rho,False),('v_max',speed,False),('B_max',bmag,False),('va_max',va,False),('beta_min',beta,True),('va_max_outside',np.where(sink,np.nan,va),False)]:
+    for name, values, minimum in [('rho_min',rho,True),('rho_max',rho,False),('v_max',speed,False),('B_max',bmag,False),('va_max',va,False),('beta_min',beta,True),('va_max_outside',np.where(sink,np.nan,va),False),('v_max_sink',np.where(sink,speed,np.nan),False),('va_max_sink_vtk',np.where(sink,va,np.nan),False)]:
         valid = np.flatnonzero(np.isfinite(values))
         idx = valid[np.argmin(values[valid]) if minimum else np.argmax(values[valid])] if valid.size else None
         result[name] = float(values[idx]) if idx is not None else np.nan
@@ -481,6 +495,17 @@ def block_metrics(path):
             total = CS**2+va**2
             cf = np.sqrt(.5*(total+np.sqrt(np.maximum(total**2-4*CS**2*b[:,a]**2/rho,0))))
             dt_wave = np.minimum(dt_wave,CFL*dxs[a]/(np.abs(vel[:,a])+cf))
+    radius = np.linalg.norm(xyz-SINK_CENTER,axis=1)
+    dx_min = np.minimum.reduce(dxs)
+    buffer = (radius>=SINK_RADIUS)&(radius<SINK_RADIUS+SINK_NO_OUTFLOW_CELLS*dx_min)&(radius>0)
+    vr = np.divide(np.sum(vel*(xyz-SINK_CENTER),axis=1),radius,
+                   out=np.full(n,np.nan),where=radius>0)
+    valid_buffer = buffer & np.isfinite(vr)
+    result['buffer_cells'] = int(buffer.sum())
+    result['buffer_outward_cells'] = int(np.count_nonzero(valid_buffer & (vr*VELOCITY_CGS>BUFFER_VR_TOL_CGS)))
+    result['buffer_vr_max'] = float(vr[valid_buffer].max()) if valid_buffer.any() else np.nan
+    result['buffer_vr_min'] = float(vr[valid_buffer].min()) if valid_buffer.any() else np.nan
+    result['buffer_outward_max'] = max(0.,result['buffer_vr_max']) if valid_buffer.any() else np.nan
     result['dt_wave_est'] = float(np.min(dt_wave))
     result['dt_ohm_est'] = float(CFL*min(w.min() for w in widths)**2/(6*ETA_OHM)) if ETA_OHM>0 else np.nan
     # セル中心Bの微分。ブロック端1層を除外し、CTの離散発散とは明確に区別。
@@ -561,6 +586,10 @@ def save_initial_density_profile(paths, out, report):
     mass = np.zeros(PROFILE_BINS)
     volumes = np.zeros(PROFILE_BINS)
     counts = np.zeros(PROFILE_BINS,dtype=int)
+    level_min = np.full(PROFILE_BINS,np.inf)
+    level_max = np.full(PROFILE_BINS,-np.inf)
+    level_sum = np.zeros(PROFILE_BINS)
+    levels_valid = True
     for path in paths:
         time,_,coords,fields = read_vtk(path)
         r,v = geometry(coords)
@@ -569,6 +598,16 @@ def save_initial_density_profile(paths, out, report):
         if not valid.all():
             note(report,'FAIL','初期密度プロファイル','非有限/非正密度があるためプロファイル作成を中止。')
             return
+        widths = [np.diff(c) for c in coords]
+        levels = [np.log2(ROOT_CELL_WIDTH[a]/w) for a,w in enumerate(widths)]
+        level = int(round(float(levels[0][0])))
+        if level<0 or not all(np.allclose(v,level,rtol=0,atol=1e-4) for v in levels):
+            levels_valid = False
+        shell = np.searchsorted(edges,r,side='right')-1
+        ok = (shell>=0)&(shell<PROFILE_BINS)
+        np.minimum.at(level_min,shell[ok],level)
+        np.maximum.at(level_max,shell[ok],level)
+        level_sum += np.histogram(r,bins=edges,weights=v*level)[0]
         mass += np.histogram(r,bins=edges,weights=rho*v)[0]
         volumes += np.histogram(r,bins=edges,weights=v)[0]
         counts += np.histogram(r,bins=edges)[0]
@@ -578,6 +617,25 @@ def save_initial_density_profile(paths, out, report):
     rows = [dict(time=time,radius=radius[i],radius_inner=edges[i],radius_outer=edges[i+1],
                  rho_mean=mean[i],volume=volumes[i],cells=int(counts[i])) for i in range(PROFILE_BINS)]
     write_csv(out/'initial_density_profile.csv',rows)
+    if levels_valid:
+        level_mean = np.divide(level_sum,volumes,out=np.full(PROFILE_BINS,np.nan),where=volumes>0)
+        level_min[volumes==0] = np.nan
+        level_max[volumes==0] = np.nan
+        write_csv(out/'initial_smr_profile.csv', [dict(time=time,radius=radius[i],
+            smr_level_min=level_min[i],smr_level_max=level_max[i],smr_level_mean=level_mean[i]) for i in range(PROFILE_BINS)])
+        fig,ax = plt.subplots(figsize=(8,5))
+        ax.fill_between(radius*L_UNIT_CM,level_min,level_max,alpha=.2,label='Shell min-max')
+        ax.semilogx(radius*L_UNIT_CM,level_mean,marker='.',label='Volume-weighted mean')
+        ax.axvline(SINK_RADIUS*L_UNIT_CM,color='red',ls='--',label='Sink radius')
+        ax.set(xlabel='Radius [cm]',ylabel='SMR level (root = 0)',title=f'First saved mesh: t={time*TIME_KYR:.6g} kyr')
+        ax.grid(alpha=.25); ax.legend(); fig.tight_layout()
+        fig.savefig(out/'initial_smr_profile.png',dpi=160)
+        if SHOW_PLOTS:
+            plt.show()
+        plt.close(fig)
+    else:
+        note(report,'UNKNOWN','SMRレベル','設定rootセル幅から同一整数レベルを復元できません。ROOT_CELL_WIDTHを確認してください。')
+
     fig,ax = plt.subplots(figsize=(8,5))
     ax.loglog(radius*L_UNIT_CM,mean*DENSITY_CGS,marker='.',label='Volume-weighted shell mean')
     ax.axvline(SINK_RADIUS*L_UNIT_CM,color='red',ls='--',label='Sink radius')
@@ -591,7 +649,7 @@ def save_initial_density_profile(paths, out, report):
          f'最初の出力 t={time*TIME_KYR:.8g} kyr。sink内を含む球殻体積加重平均。t=0でなければ初期条件そのものではない。外側の殻は計算領域内の部分のみ。')
 
 
-def check_vtk(root, out, report):
+def check_vtk(root, out, report, hst_data=None):
     groups = defaultdict(list)
     for path in sorted(root.rglob(VTK_GLOB)):
         if out in path.parents:
@@ -606,9 +664,9 @@ def check_vtk(root, out, report):
     selected = set(SLICE_STEPS if SLICE_STEPS is not None else [steps[0],steps[len(steps)//2],steps[-1]])
     rows, positions, bad_fields = [], [], []
     baseline_ids, baseline_volume, previous_time = None, None, None
-    sum_keys = ['cells','volume','nonfinite','nonpositive_rho','mass','magnetic_energy','sink_mass','floor_cells','floor_cells_outside','sink_target_cells','div_proxy_sqvol','div_proxy_volume']
-    min_keys = ['rho_min','beta_min','dt_wave_est','dt_ohm_est']
-    max_keys = ['rho_max','v_max','B_max','va_max','va_max_outside','div_proxy_max']
+    sum_keys = ['cells','volume','nonfinite','nonpositive_rho','mass','magnetic_energy','sink_mass','floor_cells','floor_cells_outside','sink_target_cells','div_proxy_sqvol','div_proxy_volume','buffer_cells','buffer_outward_cells']
+    min_keys = ['buffer_vr_min','rho_min','beta_min','dt_wave_est','dt_ohm_est']
+    max_keys = ['v_max_sink','va_max_sink_vtk','buffer_vr_max','buffer_outward_max','rho_max','v_max','B_max','va_max','va_max_outside','div_proxy_max']
     for step in steps:
         print(f'[VTK] output={step:05d}, blocks={len(groups[step])}',flush=True)
         blocks, slices, ids = [], [], []
@@ -681,12 +739,22 @@ def check_vtk(root, out, report):
          f'EXPECTED_BLOCKS={EXPECTED_BLOCKS}。ブロックID集合・体積の時間的一致は検査するが、全時刻共通の欠落やghost/空間重複は保証しない。')
     note(report,'FAIL' if bad_fields or any(r['nonpositive_rho'] for r in rows) else ('OK' if rows else 'UNKNOWN'),
          '全セル有限値・密度正値','全cell_dataを走査。FAILした出力の派生極値は有限セルだけの参考値。')
-    for filename,keys in [('extrema.png',['rho_min','rho_max','v_max','B_max','va_max','va_max_outside']),
-                          ('floor_cells.png',['floor_cells','floor_cells_outside','sink_target_cells']),
+    for filename,keys in [('extrema.png',['rho_min','rho_max','v_max','B_max','va_max','va_max_outside','v_max_sink','va_max_sink_vtk']),
+                          ('floor_cells.png',['floor_cells','floor_cells_outside','sink_target_cells','blocks']),
+                          ('sink_buffer.png',['buffer_vr_min','buffer_vr_max','buffer_outward_max','buffer_cells','buffer_outward_cells']),
                           ('vtk_mass_energy.png',['mass','sink_mass','magnetic_energy']),
                           ('dt_estimates.png',['dt_wave_est','dt_ohm_est']),
                           ('divB_proxy.png',['div_proxy_max','div_proxy_rms'])]:
-        save_plot(out,filename,[(k,[r['time'] for r in rows],[r[k] for r in rows]) for k in keys],None,True)
+        curves = [(k,[r['time'] for r in rows],[r[k] for r in rows]) for k in keys]
+        if filename == 'extrema.png':
+            for segment in sorted({r['segment'] for r in (hst_data or [])}):
+                group = [r for r in hst_data if r['segment']==segment and 'Va_max_sink' in r]
+                if group:
+                    curves.append((f'Va_max_sink [HST {segment}]',[r['time'] for r in group],[r['Va_max_sink'] for r in group]))
+        save_plot(out,filename,curves,None,True)
+    note(report,'UNKNOWN' if not any(r['buffer_cells'] for r in rows) else ('WARN' if any(r['buffer_outward_cells'] for r in rows) else 'INFO'),'バッファー速度',
+         f'外向き正、許容値={BUFFER_VR_TOL_CGS:g} cm/s。対象セル数0なら未評価。初期出力は処理前の可能性あり。sink_buffer.png参照。')
+    note(report,'UNKNOWN','バッファー数値質量flux','VTKは処理後セル中心速度のみ。外向き面fluxを厳密に禁止した証明にはならない。')
     note(report,'UNKNOWN','CTの離散発散',
          '面中心磁場が未保存。divB_proxyはセル中心Bの微分（各ブロック端1層を除外）。CT誤差や細分化境界の評価には使用不可。')
     note(report,'INFO','保存状態の時間刻み推定',
@@ -699,6 +767,10 @@ def check_vtk(root, out, report):
 root = VTK_DIR.expanduser().resolve()
 if not root.is_dir():
     raise FileNotFoundError(f'設定セルのVTK_DIRを変更してください: {root}')
+if np.shape(ROOT_CELL_WIDTH)!=(3,) or not np.isfinite(ROOT_CELL_WIDTH).all() or np.any(ROOT_CELL_WIDTH<=0):
+    raise ValueError('ROOT_CELL_WIDTHには各軸の正のrootセル幅を3つ指定してください')
+if not np.isfinite([SINK_NO_OUTFLOW_CELLS,BUFFER_VR_TOL_CGS]).all() or SINK_NO_OUTFLOW_CELLS<0 or BUFFER_VR_TOL_CGS<0:
+    raise ValueError('バッファー幅・速度許容値は非負の有限値にしてください')
 if not isinstance(PROFILE_BINS,int) or PROFILE_BINS < 2:
     raise ValueError('PROFILE_BINSは2以上の整数にしてください')
 if CS <= 0 or CFL <= 0 or ETA_OHM < 0 or SINK_RADIUS <= 0 or DFLOOR <= 0:
@@ -717,6 +789,8 @@ settings = {
     'SLICE_STEPS': SLICE_STEPS, 'PROFILE_BINS': PROFILE_BINS,
     'SLICE_HALF_WIDTH [cm]': SLICE_HALF_WIDTH*L_UNIT_CM if SLICE_HALF_WIDTH is not None else None,
     'SHOW_PLOTS': SHOW_PLOTS,
+    'ROOT_CELL_WIDTH [cm]': (ROOT_CELL_WIDTH*L_UNIT_CM).tolist(),
+    'SINK_NO_OUTFLOW_CELLS': SINK_NO_OUTFLOW_CELLS, 'BUFFER_VR_TOL_CGS': BUFFER_VR_TOL_CGS,
     'input_unit_scales': {'mass [g]': M_UNIT_G, 'length [cm]': L_UNIT_CM, 'time [s]': T_UNIT_S,
                           'magnetic_field [G]': float(B_GAUSS), 'solar_mass [g]': MSUN_G},
 }
@@ -727,6 +801,7 @@ write_csv(out/'diagnostic_criteria.csv', [dict(item=k, criterion=v) for k,v in D
 
 # 各検査セルの再実行で判定が重複しないよう、結果を分けて保持する。
 log_report, hst_report, vtk_report = None, None, None
+hst_data = None
 print(f'保存先: {out}')
 
 # %% 1. ログ・時間刻みの確認
@@ -739,13 +814,13 @@ check_logs(root, out, log_report)
 hst_report = []
 for name in ['history.csv', 'history_balance.csv', 'mdot_ratios.csv']:
     (out/name).write_text('', encoding='utf-8')
-check_hst(root, out, hst_report)
+hst_data = check_hst(root, out, hst_report)
 
 # %% 3. VTK全セル・極値・磁場・断面図の確認（時間がかかるセル）
 vtk_report = []
-for name in ['vtk_history.csv', 'extrema_locations.csv', 'nonfinite_fields.csv', 'initial_density_profile.csv']:
+for name in ['vtk_history.csv', 'extrema_locations.csv', 'nonfinite_fields.csv', 'initial_density_profile.csv', 'initial_smr_profile.csv']:
     (out/name).write_text('', encoding='utf-8')
-check_vtk(root, out, vtk_report)
+check_vtk(root, out, vtk_report, hst_data)
 
 # %% 4. 判定結果の表示・保存（検査セルを再実行した後はこのセルも実行）
 report = []
