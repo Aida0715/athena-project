@@ -1165,6 +1165,8 @@ import os
 import re
 import glob
 import gc
+import multiprocessing as mp
+import traceback
 from collections import defaultdict
 
 import numpy as np
@@ -1228,10 +1230,20 @@ max_color_samples_per_step = 20000
 # Falseなら保存済み画像を再描画せず、途中から再開できる。
 overwrite_existing = False
 
+# x-y図の実行対象。"full", "zoom", "both" のいずれかを指定する。
+# メモリが厳しい場合は、まず"zoom"を実行し、その後"full"を実行する。
+xy_plot_mode = "zoom"
+
+if xy_plot_mode not in {"full", "zoom", "both"}:
+    raise ValueError(
+        'xy_plot_mode must be one of "full", "zoom", or "both".'
+    )
+
 print("=== Output directories ===")
 print(f"Output root : {output_root_xy}")
 print(f"Full images : {output_dir1}")
 print(f"1/10 zoom   : {output_dir2}")
+print(f"Plot mode   : {xy_plot_mode}")
 
 
 # ============================================================
@@ -2235,9 +2247,75 @@ def plot_xy_density_with_fieldlines(
 
 
 # ============================================================
-# 10. 各1時刻を1回だけ読み込み、全体図とズーム図を連続保存
+# 10. 1時刻ごとに独立した子プロセスで描画
+#
+# Qhull(Delaunay)やVTKのネイティブメモリは、Pythonのdel/gcだけでは
+# OSへ即時返却されないことがある。各時刻を子プロセスで実行し、
+# 保存後にプロセスごと終了させることで確実に回収する。
 # ============================================================
-print("\n=== Generating full and 1/10-zoom images ===")
+def xy_plot_one_timestep_worker(step, make_full, make_zoom, result_sender):
+    """1時刻分を読み込み、指定された図を保存する子プロセス関数。"""
+
+    step_data = None
+    generated = {"full": None, "zoom": None}
+    try:
+        plt.ioff()
+        step_data = prepare_xy_slice(step)
+
+        if make_full:
+            print(f"[CHILD FULL] Processing step={step:05d}", flush=True)
+            generated["full"] = plot_xy_density_with_fieldlines(
+                step=step,
+                output_dir=output_dir1,
+                zoom_fraction=None,
+                filename_suffix="full",
+                prepared_data=step_data,
+            )
+            plt.close("all")
+            gc.collect()
+
+        if make_zoom:
+            print(f"[CHILD ZOOM 1/10] Processing step={step:05d}", flush=True)
+            generated["zoom"] = plot_xy_density_with_fieldlines(
+                step=step,
+                output_dir=output_dir2,
+                zoom_fraction=zoom_fraction_10,
+                filename_suffix="zoom_1over10",
+                prepared_data=step_data,
+            )
+            plt.close("all")
+            gc.collect()
+
+        result_sender.send({"ok": True, "generated": generated})
+    except BaseException:
+        error_text = traceback.format_exc()
+        try:
+            result_sender.send({"ok": False, "traceback": error_text})
+        finally:
+            print(error_text, flush=True)
+        raise
+    finally:
+        if step_data is not None:
+            del step_data
+        plt.close("all")
+        gc.collect()
+        result_sender.close()
+
+
+print(f"\n=== Generating x-y images: mode={xy_plot_mode} ===")
+
+# Linuxのforkなら、Jupyterセル内で定義した関数をそのまま子プロセスで使える。
+# 子で生じたネイティブメモリは、子の終了と同時にOSへ返却される。
+available_methods = mp.get_all_start_methods()
+if "fork" not in available_methods:
+    raise RuntimeError(
+        "This memory-isolated Jupyter implementation requires the "
+        "multiprocessing 'fork' start method."
+    )
+xy_mp_context = mp.get_context("fork")
+
+request_full = xy_plot_mode in {"full", "both"}
+request_zoom = xy_plot_mode in {"zoom", "both"}
 
 full_output_files = []
 zoom10_output_files = []
@@ -2252,58 +2330,70 @@ for n, step in enumerate(timesteps):
         f"xy_density_Blines_{step:05d}_zoom_1over10.png",
     )
 
-    need_full = overwrite_existing or not os.path.isfile(full_file)
-    need_zoom = overwrite_existing or not os.path.isfile(zoom_file)
+    need_full = request_full and (
+        overwrite_existing or not os.path.isfile(full_file)
+    )
+    need_zoom = request_zoom and (
+        overwrite_existing or not os.path.isfile(zoom_file)
+    )
+
+    if request_full and not need_full:
+        print(f"[SKIP] Full image already exists: {full_file}")
+    if request_zoom and not need_zoom:
+        print(f"[SKIP] Zoom image already exists: {zoom_file}")
 
     if not need_full and not need_zoom:
         print(
             f"[SKIP {n+1:3d}/{len(timesteps):3d}] "
-            f"step={step:05d}: both images already exist"
+            f"step={step:05d}: requested image(s) already exist"
         )
+    else:
+        print(
+            f"[SPAWN {n+1:3d}/{len(timesteps):3d}] "
+            f"step={step:05d}, full={need_full}, zoom={need_zoom}",
+            flush=True,
+        )
+
+        result_receiver, result_sender = xy_mp_context.Pipe(duplex=False)
+        worker = xy_mp_context.Process(
+            target=xy_plot_one_timestep_worker,
+            args=(step, need_full, need_zoom, result_sender),
+            name=f"xy-plot-step-{step:05d}",
+        )
+        worker.start()
+        result_sender.close()
+        worker.join()
+
+        message = result_receiver.recv() if result_receiver.poll() else None
+        result_receiver.close()
+        exit_code = worker.exitcode
+        worker.close()
+
+        if exit_code != 0 or message is None or not message.get("ok", False):
+            if message is not None and "traceback" in message:
+                detail = message["traceback"]
+            elif exit_code is not None and exit_code < 0:
+                detail = (
+                    f"Worker was terminated by signal {-exit_code}. "
+                    "If this was SIGKILL, check the OS OOM log."
+                )
+            else:
+                detail = f"Worker exit code: {exit_code}"
+            raise RuntimeError(
+                f"x-y plotting failed at step={step:05d}.\n{detail}"
+            )
+
+        print(
+            f"[CHILD EXIT] step={step:05d}, exit_code={exit_code}; "
+            "all per-step native memory was released",
+            flush=True,
+        )
+
+    if request_full and os.path.isfile(full_file):
         full_output_files.append(full_file)
+    if request_zoom and os.path.isfile(zoom_file):
         zoom10_output_files.append(zoom_file)
-        continue
 
-    print(
-        f"[LOAD {n+1:3d}/{len(timesteps):3d}] "
-        f"step={step:05d}"
-    )
-    step_data = prepare_xy_slice(step)
-
-    if need_full:
-        print(f"[FULL] Processing step={step:05d}")
-        full_file = plot_xy_density_with_fieldlines(
-            step=step,
-            output_dir=output_dir1,
-            zoom_fraction=None,
-            filename_suffix="full",
-            prepared_data=step_data,
-        )
-        # plot関数の局所配列とMatplotlibの循環参照を回収
-        plt.close("all")
-        gc.collect()
-    else:
-        print(f"[SKIP] Full image already exists: {full_file}")
-
-    if need_zoom:
-        print(f"[ZOOM 1/10] Processing step={step:05d}")
-        zoom_file = plot_xy_density_with_fieldlines(
-            step=step,
-            output_dir=output_dir2,
-            zoom_fraction=zoom_fraction_10,
-            filename_suffix="zoom_1over10",
-            prepared_data=step_data,
-        )
-        plt.close("all")
-        gc.collect()
-    else:
-        print(f"[SKIP] Zoom image already exists: {zoom_file}")
-
-    full_output_files.append(full_file)
-    zoom10_output_files.append(zoom_file)
-
-    # 次時刻へ進む前にPyVista由来の生配列も解放
-    del step_data
     gc.collect()
 
 
@@ -2312,32 +2402,14 @@ for n, step in enumerate(timesteps):
 # ============================================================
 
 print("\n=== Finished ===")
-print(
-    f"Full images : "
-    f"{len(full_output_files)}"
-)
-
-print(
-    f"1/10 zoom   : "
-    f"{len(zoom10_output_files)}"
-)
-
-print(f"\nFull output directory:\n{output_dir1}")
-print(f"\n1/10 zoom output directory:\n{output_dir2}")
-
-print("\nFull images:")
-for filename in full_output_files:
-    print(
-        "  ",
-        os.path.basename(filename)
-    )
-
-print("\n1/10 zoom images:")
-for filename in zoom10_output_files:
-    print(
-        "  ",
-        os.path.basename(filename)
-    )
+print(f"Mode          : {xy_plot_mode}")
+print(f"Output root   : {output_root_xy}")
+if request_full:
+    print(f"Full images   : {len(full_output_files)}")
+    print(f"Full directory: {output_dir1}")
+if request_zoom:
+    print(f"Zoom images   : {len(zoom10_output_files)}")
+    print(f"Zoom directory: {output_dir2}")
 
 
      
