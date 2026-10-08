@@ -1,0 +1,21 @@
+]633;E;date -Is;c14d81ca-eb1d-453b-8a74-dea4fa9df12b]633;C2026-10-08T16:35:50+09:00
+Python 3.10.12
+g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Copyright (C) 2021 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Copyright (C) 2021 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+mpirun (Open MPI) 4.1.2
+
+Report bugs to http://www.open-mpi.org/community/help/
+GNU Make 4.3
+このプログラムは x86_64-pc-linux-gnu 用にビルドされました
+Copyright (C) 1988-2020 Free Software Foundation, Inc.
+ライセンス GPLv3+: GNU GPL バージョン 3 以降 <http://gnu.org/licenses/gpl.html>
+これはフリーソフトウェアです: 自由に変更および配布できます.
+法律の許す限り、　無保証　です.

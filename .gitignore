@@ -5,3 +5,9 @@ obj/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Athena++ generated build files
+/Makefile
+/configure.log
+/src/defs.hpp
+/mesh_structure.dat
