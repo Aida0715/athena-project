@@ -36,6 +36,7 @@
 #include "../hydro/hydro.hpp"
 #include "../mesh/mesh.hpp"
 #include "../parameter_input.hpp"
+#include "../units/units.hpp"
 
 #ifdef MPI_PARALLEL
 #include <mpi.h>
@@ -111,16 +112,13 @@ Real epsilon_soft = 0.5;   // gravitational softening
 // ===== unit system (code unit <-> cgs) =====
 const Real Msun = 1.98847e33;       // g
 const Real AU   = 1.495978707e13;   // cm
-const Real Munit = 4.0e33;   // g (central star mass)
-const Real Lunit = 7.03e15;   // cm ((bondi radius )/2 , bondi radius = 1.41e16)
-const Real Tunit = 3.61e10;  // s (free fall time)
+// Initialized from Mesh::punit before any MeshBlocks are constructed.
+Real Munit, Lunit, Tunit;
 
 const Real fit_rmin_au = 1.0e3;  // フィッティング値を入れる最小半径
 const Real fit_rmax_au = 1.0e5;  // フィッティング値を入れる最大半径
 
-const Real Vunit = Lunit/Tunit;                 // velocity unit
-const Real Rhounit = Munit/(Lunit*Lunit*Lunit); // density unit
-const Real Punit = Rhounit*Vunit*Vunit;         // pressure unit
+Real Vunit, Rhounit;
 
 // ===== シンク用変数の宣言 =====
 bool use_sink = true;
@@ -274,6 +272,46 @@ Real VrMMHCode(Real r_code) {
 
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
+  // Require explicit units so legacy inputs cannot silently use the ISM defaults.
+  if (punit->unit_system != "custom") {
+    std::stringstream msg;
+    msg << "Toyouchi requires <units> unit_system=custom and mass_cgs, "
+           "length_cgs, time_cgs.";
+    ATHENA_ERROR(msg);
+  }
+  Munit = punit->code_mass_cgs;
+  Lunit = punit->code_length_cgs;
+  Tunit = punit->code_time_cgs;
+  if (!(std::isfinite(Munit) && Munit > 0.0
+        && std::isfinite(Lunit) && Lunit > 0.0
+        && std::isfinite(Tunit) && Tunit > 0.0)) {
+    std::stringstream msg;
+    msg << "Toyouchi units must be finite and positive.";
+    ATHENA_ERROR(msg);
+  }
+  Vunit = punit->code_velocity_cgs;
+  Rhounit = punit->code_density_cgs;
+  gconst = punit->grav_const_code;
+
+  const Real sound_speed_kms = pin->GetReal("hydro", "sound_speed_kms");
+  const Real epsilon_au = pin->GetReal("problem", "epsilon_au");
+  if (!(std::isfinite(sound_speed_kms) && sound_speed_kms > 0.0
+        && std::isfinite(epsilon_au) && epsilon_au >= 0.0)) {
+    std::stringstream msg;
+    msg << "sound_speed_kms must be finite and positive; "
+           "epsilon_au must be finite and non-negative.";
+    ATHENA_ERROR(msg);
+  }
+  // EOS constructors and ProblemGenerator read this code-unit value later.
+  pin->SetReal("hydro", "iso_sound_speed", sound_speed_kms * 1.0e5 / Vunit);
+  epsilon_soft = epsilon_au * AU / Lunit;
+
+  if (Globals::my_rank == 0) {
+    punit->PrintCodeUnits();
+    std::cout << "Toyouchi converted parameters: G=" << gconst
+              << " iso_sound_speed=" << sound_speed_kms * 1.0e5 / Vunit
+              << " epsilon=" << epsilon_soft << std::endl;
+  }
 
 
   // ===== 初期密度ノイズの設定 =====
@@ -300,8 +338,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     ATHENA_ERROR(msg);
   }
 
-  epsilon_soft = pin->GetOrAddReal("problem","epsilon",0.5);
-  gconst = pin->GetOrAddReal("problem","grav_const",1.0);
 
   // ===== sink parameters =====
   use_sink =
@@ -459,7 +495,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   bz_microgauss = pin->GetOrAddReal("problem", "bz_microgauss", 0.0);
 
   // CGS→コード単位の変換基準
-  Bunit = std::sqrt(4.0*M_PI*Punit);
+  Bunit = punit->code_magneticfield_cgs;
 
   // 磁場をCGS→コード単位へ変換
   Real bz_phys = bz_microgauss * 1.0e-6;  // μG→Gaussに変換
@@ -474,7 +510,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
         << "  Bz code     = " << bz_code << std::endl;
   }
 
-  //重力定数（入力ファイルから読み込む）
+  // Units が CGS 定数から換算した重力定数を自己重力にも使用
   if (SELF_GRAVITY_ENABLED) {
     SetGravitationalConstant(gconst);
   }
