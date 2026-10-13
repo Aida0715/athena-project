@@ -90,7 +90,7 @@ ox3_bc          = multipole
 <problem>
 # sink関連
 use_sink                  = true
-r_sink_au                 = 500.0
+r_sink_au                 = 1000.0
 sink_rho_floor            = 0.00061060697788434 # code density; same physical floor
 sink_no_outflow_cells     = 1.0
 sink_refine_buffer_factor = 1.0
