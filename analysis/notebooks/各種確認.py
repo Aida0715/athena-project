@@ -31,9 +31,9 @@ EXPECTED_BLOCKS = None  # 実行時の総MeshBlock数。未指定なら完全性
 EXPECTED_TLIM = 43.86
 DFLOOR = 1.0e-6
 SINK_RHO = 6.3e-2
-SINK_RADIUS = 1000.0 * 1.495978707e13 / 7.03e15
+SINK_RADIUS = 1000.0 * 1.495978707e13 / 1.495978707e15
 SINK_CENTER = np.array([0.0, 0.0, 0.0])
-CS = 0.707
+CS = 3.9954968108039886
 CFL = 0.3
 ETA_OHM = 0.1  # 一定Ohmic拡散、Hall/ADなしの場合の刻み目安
 SMALL_DT = 1.0e-6
@@ -50,9 +50,9 @@ SHOW_PLOTS = True  # Jupyterのセル出力にも図を表示（PNG保存は常�
 # %% 単位換算・物理量一覧・診断基準（最初の出力）
 # 入力と内部計算はシミュレーション単位を保ち、表示・保存時に一度だけ換算する。
 # 設定の時間・密度・長さ等も入力ファイルと同じシミュレーション単位。
-M_UNIT_G = 4.0e33
-L_UNIT_CM = 7.03e15
-T_UNIT_S = 3.61e10
+M_UNIT_G = 3.97694e33
+L_UNIT_CM = 1.495978707e15
+T_UNIT_S = 3.15576e10
 MSUN_G = 1.98847e33
 KYR_S = 1000 * 365.25 * 86400
 TIME_KYR = T_UNIT_S / KYR_S

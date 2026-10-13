@@ -52,8 +52,8 @@ if not hst_file.is_file():
 # ============================================================
 # コード単位
 # ============================================================
-M_UNIT_CGS = 4.0e33
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33  # 2 M_sun
+T_UNIT_CGS = 3.15576e10  # 1 kyr
 
 M_SUN_CGS = 1.98847e33
 YEAR_CGS = 365.25 * 24.0 * 3600.0
@@ -636,8 +636,8 @@ _MDOT_OUTPUT_DIR = _MdotPath("./stellar_mass_rate_comparison").resolve()
 _MDOT_OUTPUT_FILE = _MDOT_OUTPUT_DIR / "mdot_time_weighted_means.png"
 _MDOT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-_MDOT_M_UNIT_CGS = 4.0e33
-_MDOT_T_UNIT_CGS = 3.61e10
+_MDOT_M_UNIT_CGS = 3.97694e33  # 2 M_sun
+_MDOT_T_UNIT_CGS = 3.15576e10  # 1 kyr
 _MDOT_MSUN_CGS = 1.98847e33
 _MDOT_YEAR_CGS = 365.25 * 24.0 * 3600.0
 

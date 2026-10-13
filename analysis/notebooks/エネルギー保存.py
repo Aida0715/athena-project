@@ -8,6 +8,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+# Toyouchi 新コード単位系: T0 = 1 kyr
+T_UNIT_CGS = 3.15576e10
+YEAR_CGS = 365.25 * 24.0 * 3600.0
+TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
+
 # ============================================
 # hst ファイル読み込み
 # ============================================
@@ -16,7 +21,7 @@ file = "/home/aian/athenapp/results/〇〇/〇〇.hst"
 
 data = np.loadtxt(file)
 
-time = data[:,0]
+time = data[:,0] * TIME_UNIT_KYR
 dt   = data[:,1]
 mass = data[:,2]
 
@@ -150,4 +155,3 @@ png = os.path.join(output_dir, f"relative_energy_error.png")
 plt.savefig(png, dpi=300)
 
 plt.show()
-

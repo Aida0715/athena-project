@@ -8,7 +8,7 @@
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=0.707（コード単位、L0 = rb / 2）
+#   ・等温音速 cs=3.9954968108039886（L0=100 AU, T0=1 kyr）
 #   ・Athena++規格：Pmag=B^2/2
 #
 # 必要パッケージ：numpy, scipy, matplotlib, pyvista
@@ -43,7 +43,7 @@ output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
 
 # 等温音速（コード単位）
-CS_CODE = 0.707
+CS_CODE = 3.9954968108039886
 
 # βの共通表示範囲。添付図と同じく 10^-1 ～ 10^2
 # 自動範囲にしたい場合は両方をNoneにする
@@ -78,9 +78,9 @@ SHOW_IMAGES = False
 # 2. コード単位
 # ============================================================
 
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 YEAR_CGS = 365.25 * 24.0 * 3600.0
@@ -556,7 +556,7 @@ print(f"1/10 zoom images   : {len(saved_zoom10)} -> {output_dir_zoom10}")
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=0.707（コード単位、L0 = rb / 2）
+#   ・等温音速 cs=3.9954968108039886（L0=100 AU, T0=1 kyr）
 #   ・Athena++規格：Pmag=B^2/2
 #   ・x-z面への投影磁場(Bx,Bz)を細い黒線で重ねる
 #
@@ -592,7 +592,7 @@ output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
 
 # 等温音速（コード単位）
-CS_CODE = 0.707
+CS_CODE = 3.9954968108039886
 
 # βの共通表示範囲：全stepの1--99 percentileから自動決定
 BETA_VMIN = None
@@ -631,9 +631,9 @@ SHOW_IMAGES = False
 # 2. コード単位
 # ============================================================
 
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 YEAR_CGS = 365.25 * 24.0 * 3600.0
@@ -1159,4 +1159,3 @@ for index, step in enumerate(steps, start=1):
 print("\n=== Completed ===")
 print(f"Full-domain images : {len(saved_full)} -> {output_dir_full}")
 print(f"1/10 zoom images   : {len(saved_zoom10)} -> {output_dir_zoom10}")
-

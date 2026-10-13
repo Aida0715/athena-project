@@ -46,9 +46,9 @@ if not vtk_dir.is_dir():
 
 
 # --------------------------- 単位 ----------------------------
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -497,9 +497,9 @@ if not vtk_dir.is_dir():
 
 
 # --------------------------- 単位 ----------------------------
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -953,9 +953,9 @@ if not vtk_dir.is_dir():
 
 
 # --------------------------- 単位 ----------------------------
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -1458,6 +1458,5 @@ for index, step in enumerate(steps, start=1):
     gc.collect()
 
 print("[DONE] All density maps were saved.")
-
 
 

@@ -22,20 +22,21 @@ from pathlib import Path
 
 # IDEから実行するときの設定。対象runの値に変更する。
 DATADIR = "~/athena-project/results/〇〇"
-ISO_SOUND_SPEED_CODE = 0.707
-GRAV_CONST_CODE = 1.0
+ISO_SOUND_SPEED_CODE = 3.9954968108039886
 SINK_RADIUS_AU = 1000.0  # 対象runに合わせる。シンクなしの場合は0。
 OUTPUT_DIR = "./jeans_diagnostics"
 THRESHOLDS = (4, 8, 16, 32)
 # 全領域を診断。中心のみなら例: ((-5000, 5000),) * 3 [au]
 ANALYSIS_BOUNDS_AU = None
 SLICE_HALF_WIDTH_AU = 5000.0
-L_UNIT_CGS = 7.03e15
-M_UNIT_CGS = 4.0e33
-T_UNIT_CGS = 3.61e10
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 AU_CGS = 1.495978707e13
+G_CGS = 6.67430e-8
 L_AU = L_UNIT_CGS / AU_CGS
 T_KYR = T_UNIT_CGS / (365.25 * 86400 * 1000)
+GRAV_CONST_CODE = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
 
 
 def vtk_time(path):

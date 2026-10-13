@@ -46,8 +46,8 @@ analysis_bounds_au = None
 # 例: analysis_bounds_code = ((-5.0, 5.0), (-5.0, 5.0), (-2.0, 2.0))
 analysis_bounds_code = None
 
-# athinput.Toyouchi_61の新単位系（L0=rb/2）に対応する等温音速。
-ISO_SOUND_SPEED_CODE = 0.707
+# athinput.Toyouchi_63の新単位系（L0=100 AU, T0=1 kyr）に対応する等温音速。
+ISO_SOUND_SPEED_CODE = 3.9954968108039886
 vtk_output_number = 2
 
 output_dir = Path("./plasma_beta_history").resolve()
@@ -56,11 +56,11 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# 2. Toyouchi.cppの新単位系（L0 = rb / 2）
+# 2. Toyouchi.cppの新単位系（M0=2 M_sun, L0=100 AU, T0=1 kyr）
 # ============================================================
-M_UNIT_CGS = 4.0e33       # g
-L_UNIT_CGS = 7.03e15      # cm
-T_UNIT_CGS = 3.61e10      # s
+M_UNIT_CGS = 3.97694e33       # g = 2 M_sun
+L_UNIT_CGS = 1.495978707e15   # cm = 100 AU
+T_UNIT_CGS = 3.15576e10       # s = 1 kyr
 
 YEAR_CGS = 365.25 * 24.0 * 3600.0
 AU_CGS = 1.495978707e13

@@ -21,8 +21,8 @@ os.makedirs(output_dir, exist_ok=True)
 
 # ========= 単位定義 =========
 # Toyouchi.cppのコード単位
-T_UNIT_CGS = 3.61e10  # 1 code time [s] (L0 = rb / 2)
-M_UNIT_CGS = 4.0e33   # 1 code mass [g]
+T_UNIT_CGS = 3.15576e10  # 1 code time [s] = 1 kyr
+M_UNIT_CGS = 3.97694e33  # 1 code mass [g] = 2 M_sun
 
 # 物理定数
 YEAR_CGS = 365.25 * 24.0 * 3600.0  # s

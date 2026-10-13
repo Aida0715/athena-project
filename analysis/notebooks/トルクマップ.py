@@ -73,9 +73,9 @@ if not vtk_dir.is_dir():
 # ============================================================
 # コード単位
 # ============================================================
-M_UNIT_CGS = 4.0e33
-L_UNIT_CGS = 7.03e15  # L0 = rb / 2
-T_UNIT_CGS = 3.61e10
+M_UNIT_CGS = 3.97694e33      # 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # 100 AU
+T_UNIT_CGS = 3.15576e10      # 1 kyr
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -127,7 +127,7 @@ print(
 PLOT_RADIUS_AU = 1.0e5
 
 # 等温音速（code velocity）
-ISO_SOUND_SPEED_CODE = 0.707  # L0 = rb / 2
+ISO_SOUND_SPEED_CODE = 3.9954968108039886  # 1.8940534618758 km/s
 
 # 本描画解像度
 MAP_RESOLUTION = 700
@@ -1513,4 +1513,3 @@ print(
 print(
     f"[INFO] Output: {output_dir}"
 )
-

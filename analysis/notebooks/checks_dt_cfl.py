@@ -33,9 +33,9 @@ SNAPSHOT_STRIDE = 1
 TOP_K = 10
 SMALL_DT = 1e-6  # code time
 CFL = 0.3
-CS = 0.707      # iso_sound_speed。実行時の入力に合わせる
+CS = 3.9954968108039886  # sound_speed_kms=1.8940534618758, L0=100 AU, T0=1 kyr
 ROOT_DX = np.array([448/40]*3)
-L_UNIT_CM, T_UNIT_S = 7.03e15, 3.61e10
+L_UNIT_CM, T_UNIT_S = 1.495978707e15, 3.15576e10
 AU_CM = 1.495978707e13
 L_AU = L_UNIT_CM/AU_CM
 T_YR = T_UNIT_S/(365.25*86400)
@@ -386,4 +386,3 @@ for ax, horizontal, vertical in [(axes[0],'x','y'), (axes[1],'x','z')]:
 savefig(fig, 'cfl_cell_positions.png')
 print('完了:', OUT)
 print('極小dtの場所が保存時刻から分からない場合は、実行側でCFL最小セルを記録する追加診断が必要です。')
-

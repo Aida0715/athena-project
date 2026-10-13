@@ -21,9 +21,13 @@ xc, yc, zc = 0.0, 0.0, 0.0
 r_max = 224.0
 n_bins = 25
 
-G = 1.0
+M_UNIT_CGS = 3.97694e33
+L_UNIT_CGS = 1.495978707e15
+T_UNIT_CGS = 3.15576e10
+G_CGS = 6.67430e-8
+G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
 Mstar = 1.0
-cs = 0.707  # code sound speed for L0 = rb / 2
+cs = 3.9954968108039886  # 1.8940534618758 km/s for L0=100 AU, T0=1 kyr
 
 racc = 0.44
 r_cut = max(racc, 1e-12)
@@ -227,7 +231,7 @@ for step, files in step_dict.items():
     plt.xscale("log")
     plt.yscale("symlog", linthresh=1e-6)
 
-    plt.xlabel("r (×450 AU)")
+    plt.xlabel("r (×100 AU)")
     plt.ylabel("Force (radial)")
 
     plt.title(f"Force components (step {step})")
@@ -259,7 +263,7 @@ for step, files in step_dict.items():
     plt.xscale("log")
     plt.yscale("symlog", linthresh=1e-6)
 
-    plt.xlabel("r (×450 AU)")
+    plt.xlabel("r (×100 AU)")
     plt.ylabel("Force (radial)")
 
     plt.title(f"Total force (step {step})")
@@ -274,4 +278,3 @@ for step, files in step_dict.items():
     plt.close()
 
 print("Done.")
-

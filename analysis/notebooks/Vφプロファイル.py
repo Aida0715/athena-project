@@ -18,7 +18,11 @@ xc, yc, zc = 0.0, 0.0, 0.0
 r_max = 244.0
 n_bins = 25
 
-G = 1.0
+M_UNIT_CGS = 3.97694e33
+L_UNIT_CGS = 1.495978707e15
+T_UNIT_CGS = 3.15576e10
+G_CGS = 6.67430e-8
+G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
 
 racc = 0.44
 r_cut = max(racc, 1e-12)
@@ -139,7 +143,7 @@ for step, files in step_dict.items():
     plt.xscale("log")
     plt.yscale("log")
 
-    plt.xlabel("r(×450AU)")
+    plt.xlabel("r (×100 AU)")
     plt.ylabel(r"$v_\phi$")
     plt.title(f"Rotation profile LOG (step {step})")
 
@@ -162,7 +166,7 @@ for step, files in step_dict.items():
     plt.xscale("linear")
     plt.yscale("linear")
 
-    plt.xlabel("r(×450AU)")
+    plt.xlabel("r (×100 AU)")
     plt.ylabel(r"$v_\phi$")
     plt.title(f"Rotation profile LINEAR (step {step})")
 
@@ -174,4 +178,3 @@ for step, files in step_dict.items():
     plt.close()
 
 print("Done.")
-

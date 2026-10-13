@@ -82,12 +82,12 @@ print(f"1/10 zoom   : {output_dir_zoom10}")
 
 # ============================================================
 # 2. Toyouchi.cppのコード単位
-# L0 = rb / 2
+# M0=2 M_sun, L0=100 AU, T0=1 kyr
 # ============================================================
 
-Munit = 4.0e33       # g
-Lunit = 7.03e15      # cm
-Tunit = 3.61e10      # s
+Munit = 3.97694e33       # g = 2 M_sun
+Lunit = 1.495978707e15   # cm = 100 AU
+Tunit = 3.15576e10       # s = 1 kyr
 
 Vunit = Lunit / Tunit
 Rhounit = Munit / Lunit**3
@@ -1250,9 +1250,9 @@ print(f"Plot mode   : {xy_plot_mode}")
 # 2. Toyouchi.cppのコード単位
 # ============================================================
 
-Munit = 4.0e33       # g
-Lunit = 7.03e15      # cm (L0 = rb / 2)
-Tunit = 3.61e10      # s
+Munit = 3.97694e33       # g = 2 M_sun
+Lunit = 1.495978707e15   # cm = 100 AU
+Tunit = 3.15576e10       # s = 1 kyr
 
 Vunit = Lunit / Tunit
 Rhounit = Munit / Lunit**3

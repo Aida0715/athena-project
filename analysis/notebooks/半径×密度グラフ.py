@@ -190,7 +190,7 @@ for step, files in step_dict.items():
     plt.xscale("log")
     plt.yscale("log")
 
-    plt.xlabel("r(×450AU)")
+    plt.xlabel("r (×100 AU)")
     plt.ylabel("Density")
 
     plt.title(
@@ -214,4 +214,3 @@ for step, files in step_dict.items():
     plt.close()
 
 print("\nDone.")
-

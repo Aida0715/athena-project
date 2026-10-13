@@ -2750,8 +2750,8 @@ for step_idx, step_files in enumerate(zip(*all_blocks_sorted)):
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.set_xlabel("X (×450AU)", fontsize=12)
-    ax.set_ylabel("Y (×450AU)", fontsize=12)
+    ax.set_xlabel("X (×100 AU)", fontsize=12)
+    ax.set_ylabel("Y (×100 AU)", fontsize=12)
 
     # タイムステップ情報
     ax.set_title(f"Density & Streamlines (t = step {step_idx})", fontsize=12)
@@ -2997,9 +2997,9 @@ os.makedirs(output_dir, exist_ok=True)
 # 単位定義
 # ============================================================
 # Toyouchi.cppのコード単位
-M_UNIT_CGS = 4.0e33   # g
-L_UNIT_CGS = 7.03e15  # cm (L0 = rb / 2)
-T_UNIT_CGS = 3.61e10  # s
+M_UNIT_CGS = 3.97694e33      # g = 2 M_sun
+L_UNIT_CGS = 1.495978707e15  # cm = 100 AU
+T_UNIT_CGS = 3.15576e10      # s = 1 kyr
 
 # 物理定数
 AU_CGS = 1.495978707e13
