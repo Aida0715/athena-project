@@ -133,6 +133,19 @@ Real sink_rho_floor = 6.3e-2;
 // 各セルで sink_no_outflow_cells * dx として使用
 Real sink_no_outflow_cells = 1.0;
 
+// ===== 改良案: 速度を保つ質量除去（sink_mode = drain） =====
+// reset : 従来の処理（内部を sink_rho_floor・速度 0 に戻す）。既定。
+// drain : 中心核 r < sink_core_frac*r_sink は低密度・静止に戻し、
+//         その外側（r_sink の内側で tanh によりなだらかに 0 へ落ちる）では
+//         密度と運動量に同じ係数 exp(-w dt / tau) を掛けて質量だけを抜く。
+//         抜いた質量をそのまま中心星へ加える。
+bool sink_drain = false;
+Real sink_rho_core = 0.0;     // 中心核の目標密度 [code density]
+Real sink_core_frac = 0.5;    // 中心核の半径 / r_sink
+Real sink_tau_frac = 0.1;     // tau = sink_tau_frac * sqrt(r_sink^3/(G M*))
+Real sink_taper_cells = 1.5;  // 重みが落ちる幅 n [最小格子幅の何倍か]
+Real sink_va_max = 0.0;       // MHD密度下限 B^2/vA^2（中心核で補充、除去層は除去のみ）
+
 // ===== sink diagnostic data =====
 //
 // ruser_mesh_data[0]に保存する量。
@@ -142,17 +155,17 @@ enum SinkDataIndex {
   // 中心星の累積質量 [code mass]
   SINK_MSTAR = 0,
 
-  // sink境界を内向きに通過した正味質量流入率
+  // sink境界の流入率（reset: 負値を0に切り上げ、drain: 符号付き）
   // [code mass / code time]
   SINK_MDOT_FLUX = 1,
 
   // 現在の1 cycleでsink内部セルから除去した質量率
-  // 中心星質量には加えない診断量
+  // resetでは診断用、drainでは除去量−補充量を中心星へ加算
   // [code mass / code time]
   SINK_MDOT_RESET = 2,
 
-  // 通常の密度floorにより人工的に追加した質量率
-  // 中心星質量には加えない診断量
+  // シンク処理によって内部へ補充した質量率（EOSのfloor追加量は含まない）
+  // resetでは診断用、drainでは除去量−補充量を中心星へ加算
   // [code mass / code time]
   SINK_MDOT_FLOOR = 3,
 
@@ -160,15 +173,15 @@ enum SinkDataIndex {
   // 人工的なatmosphere質量を含む [code mass]
   SINK_MGAS = 4,
 
-  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  // 境界の累積流入量（reset: 正の流入のみ、drain: 符号付き）[code mass]
   SINK_MFLUX_CUM = 5,
 
   // sink内部resetで除去した累積質量 [code mass]
-  // 中心星質量には加えない診断量
+  // resetでは診断用、drainでは除去量−補充量を中心星へ加算
   SINK_MRESET_CUM = 6,
 
   // density floorで人工的に追加した累積質量 [code mass]
-  // 通常の密度floorによる追加分
+  // シンク内リセット・中心核補充による追加分
   SINK_MFLOOR_CUM = 7,
 
   // sink内部の最大Alfven速度 [code velocity]
@@ -356,9 +369,64 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   sink_no_outflow_cells =
       pin->GetOrAddReal("problem", "sink_no_outflow_cells", 1.0);
 
+  // 改良案のパラメータ（sink_mode = reset のときは使わない）
+  const std::string sink_mode =
+      pin->GetOrAddString("problem", "sink_mode", "reset");
+  sink_drain = (sink_mode == "drain");
+  if (sink_mode != "drain" && sink_mode != "reset") {
+    std::stringstream msg;
+    msg << "sink_mode must be 'reset' or 'drain'.";
+    ATHENA_ERROR(msg);
+  }
+  sink_rho_core =
+      pin->GetOrAddReal("problem", "sink_rho_core", 1.0e-2*sink_rho_floor);
+  sink_core_frac =
+      pin->GetOrAddReal("problem", "sink_core_frac", 0.5);
+  sink_tau_frac =
+      pin->GetOrAddReal("problem", "sink_tau_frac", 0.1);
+  sink_taper_cells =
+      pin->GetOrAddReal("problem", "sink_taper_cells", 1.5);
+  sink_va_max =
+      pin->GetOrAddReal("problem", "sink_va_max", 0.0);
+  if (sink_drain && NON_BAROTROPIC_EOS) {
+    std::stringstream msg;
+    msg << "sink_mode=drain is written for the isothermal EOS only.";
+    ATHENA_ERROR(msg);
+  }
+  if (sink_drain && !(std::isfinite(sink_rho_core) && sink_rho_core > 0.0
+                      && std::isfinite(sink_core_frac) && sink_core_frac >= 0.0
+                      && sink_core_frac < 1.0
+                      && std::isfinite(sink_tau_frac) && sink_tau_frac > 0.0
+                      && std::isfinite(sink_taper_cells) && sink_taper_cells > 0.0
+                      && std::isfinite(sink_va_max) && sink_va_max >= 0.0
+                      && std::isfinite(r_sink) && r_sink > 0.0
+                      && std::isfinite(sink_rho_floor) && sink_rho_floor > 0.0)) {
+    std::stringstream msg;
+    msg << "sink_mode=drain needs sink_rho_core>0, 0<=sink_core_frac<1, "
+           "sink_tau_frac>0, sink_taper_cells>0, sink_va_max>=0, "
+           "r_sink>0 and sink_rho_floor>0; all must be finite.";
+    ATHENA_ERROR(msg);
+  }
+
   // 中心星の初期質量（２M_solar）
   Real mstar_init =
       pin->GetOrAddReal("problem", "mstar_init", 1.0);
+  if (sink_drain) {
+    const Real dfloor = pin->GetReal("hydro", "dfloor");
+    if (!(std::isfinite(mstar_init) && mstar_init > 0.0
+          && std::isfinite(dfloor) && dfloor > 0.0
+          && sink_rho_core >= dfloor && sink_rho_floor >= dfloor)) {
+      std::stringstream msg;
+      msg << "sink_mode=drain requires positive finite mstar_init and dfloor, "
+             "and sink_rho_core, sink_rho_floor >= hydro/dfloor.";
+      ATHENA_ERROR(msg);
+    }
+    if (pin->GetString("time", "integrator") != "vl2") {
+      std::stringstream msg;
+      msg << "sink_mode=drain flux diagnostics currently require integrator=vl2.";
+      ATHENA_ERROR(msg);
+    }
+  }
   // ===== sink parameters読み込み終わり =====
       
   // restartファイルへ保存されるMeshデータ
@@ -376,14 +444,14 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // [code mass / code time]
   ruser_mesh_data[0](SINK_MDOT_RESET) = 0.0;
 
-  // Alfven速度floorで人工的に追加した質量率
+  // シンク内の密度リセット・中心核補充による質量率
   // [code mass / code time]
   ruser_mesh_data[0](SINK_MDOT_FLOOR) = 0.0;
 
   // sink内部に残るガス質量 [code mass]
   ruser_mesh_data[0](SINK_MGAS) = 0.0;
 
-  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  // 境界の累積流入量（reset: 正の流入のみ、drain: 符号付き）[code mass]
   ruser_mesh_data[0](SINK_MFLUX_CUM) = 0.0;
 
   // sink内部resetで除去した累積質量 [code mass]
@@ -426,7 +494,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       "Mdot_reset"
   );
 
-  // 通常の密度floorにより人工的に追加した質量率
+  // シンク処理によって内部へ補充した質量率（EOSのfloor追加量は含まない）
   // [code mass / code time]
   EnrollUserHistoryOutput(
       3,
@@ -442,7 +510,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       "Msink_gas"
   );
 
-  // sink境界を通過して中心星へ加えた累積質量 [code mass]
+  // 境界の累積流入量（reset: 正の流入のみ、drain: 符号付き）[code mass]
   EnrollUserHistoryOutput(5, SinkHistory, "Mflux_cum");
 
   // sink内部resetで除去した累積質量 [code mass]
@@ -465,7 +533,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
         << "  r_sink           = " << r_sink << " code units" << std::endl
         << "  r_sink           = " << r_sink_au << " AU" << std::endl
         << "  rho floor        = " << sink_rho_floor << std::endl
-        << "  initial Mstar    = " << mstar_init << " code units" << std::endl;
+        << "  initial Mstar    = " << mstar_init << " code units" << std::endl
+        << "  mode             = " << (sink_drain ? "drain" : "reset") << std::endl;
+    if (sink_drain) {
+      std::cout
+          << "  rho_core         = " << sink_rho_core << std::endl
+          << "  core_frac        = " << sink_core_frac << std::endl
+          << "  tau_frac         = " << sink_tau_frac << std::endl
+          << "  taper_cells      = " << sink_taper_cells << std::endl
+          << "  va_max (core)    = " << sink_va_max << std::endl;
+    }
   }
 
   // 中心星重力のON,OFF読み込み
@@ -923,10 +1000,10 @@ void Mesh::UserWorkInLoop() {
   Real flux_mass_local = 0.0;
 
   // sink内部を目標密度へ戻す際に除去した質量 [code mass]
-  // これは診断量であり、中心星質量には加えない。
+  // resetでは診断用、drainでは補充量を差し引いて中心星へ加える。
   Real reset_removed_mass_local = 0.0;
 
-  // Alfven速度floorにより人工的に追加した質量 [code mass]
+  // シンク内の密度リセット・中心核補充による質量 [code mass]
   Real floor_added_mass_local = 0.0;
 
   // リセット後にsink内部へ残るガス質量 [code mass]
@@ -1010,6 +1087,163 @@ void Mesh::UserWorkInLoop() {
         }
       }
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // 改良案（sink_mode = drain）
+  // ・中心核 r < r_core: 低密度 sink_rho_core・速度 0 に戻す
+  // ・r >= r_core: 重み w = ½[1 - tanh((r - r_mid)/h)]、
+  //   r_mid = r_sink - n Δx、h = n Δx / 2 で
+  //   ρ, ρv に f = exp(-w dt/τ) を掛ける。速度は変えない。
+  // ・ゴーストセルにも同じ処理を入れ、次ステップの第1段で
+  //   リセット前の値が残らないようにする。同一レベルでは同じ係数を適用する。
+  //   質量診断にはactiveセルだけを含め、ゴーストの重複計数を避ける。
+  // ・格子から抜いた質量（除去 − 補充）を中心星へ加える。面の流束は照合用。
+  // ・外向き速度の制限（sink_no_outflow_cells）は使わない。
+  // --------------------------------------------------------------------------
+  if (sink_drain) {
+    const Real mstar_now = ruser_mesh_data[0](SINK_MSTAR);
+    if (!(std::isfinite(mstar_now) && mstar_now > 0.0)) {
+      std::stringstream msg;
+      msg << "sink_mode=drain requires a positive finite current Mstar.";
+      ATHENA_ERROR(msg);
+    }
+    const Real tau = sink_tau_frac
+        * std::sqrt(r_sink*r_sink*r_sink / (gconst*mstar_now));
+    if (!(std::isfinite(tau) && tau > 0.0)) {
+      std::stringstream msg;
+      msg << "Invalid drain timescale: check r_sink, Mstar and sink_tau_frac.";
+      ATHENA_ERROR(msg);
+    }
+    const Real r_core = sink_core_frac * r_sink;
+    const Real w_min = 1.0e-3;
+
+    for (int n = 0; n < nblocal; ++n) {
+      MeshBlock *pmb = my_blocks(n);
+      Coordinates *pcoord = pmb->pcoord;
+      AthenaArray<Real> &u = pmb->phydro->u;
+      AthenaArray<Real> &w = pmb->phydro->w;
+#if MAGNETIC_FIELDS_ENABLED
+      AthenaArray<Real> &bcc = pmb->pfield->bcc;
+#endif
+      for (int k = 0; k < pmb->ncells3; ++k) {
+        for (int j = 0; j < pmb->ncells2; ++j) {
+          for (int i = 0; i < pmb->ncells1; ++i) {
+            const bool active = (i >= pmb->is && i <= pmb->ie
+                                 && j >= pmb->js && j <= pmb->je
+                                 && k >= pmb->ks && k <= pmb->ke);
+            const Real x = pcoord->x1v(i) - x0;
+            const Real y = pcoord->x2v(j) - y0;
+            const Real z = pcoord->x3v(k) - z0;
+            const Real r = std::sqrt(x*x + y*y + z*z);
+            const Real dx = std::min({pcoord->dx1v(i), pcoord->dx2v(j),
+                                      pcoord->dx3v(k)});
+            // 除去は r < r_sink のセルに限る（面の流束を数える領域と一致させ、
+            // 格子と星の質量の収支を照合できるようにする）。
+            if (r >= r_sink) continue;
+            const bool in_core = (r < r_core);
+            Real wgt = 1.0;
+            if (!in_core) {
+              // 重みは r_sink の内側で 1 → 0 に落ちる（r_sink の直前で約 0.02）。
+              const Real h = 0.5*sink_taper_cells*dx;
+              const Real r_mid = r_sink - sink_taper_cells*dx;
+              wgt = 0.5*(1.0 - std::tanh((r - r_mid)/h));
+              if (wgt < w_min) continue;
+            }
+
+            Real rho_core = sink_rho_core;
+            Real b2 = 0.0;
+#if MAGNETIC_FIELDS_ENABLED
+            b2 = SQR(bcc(IB1,k,j,i)) + SQR(bcc(IB2,k,j,i)) + SQR(bcc(IB3,k,j,i));
+            if (sink_va_max > 0.0) {
+              rho_core = std::max(rho_core, b2/SQR(sink_va_max));
+            }
+#endif
+            const Real rho_old = u(IDN,k,j,i);
+            if (!(std::isfinite(rho_old) && rho_old > 0.0)) {
+              std::stringstream msg;
+              msg << "Invalid gas density in drain sink at block " << pmb->gid
+                  << " cell (" << i << "," << j << "," << k << ").";
+              ATHENA_ERROR(msg);
+            }
+            Real rho_new;
+            if (in_core) {
+              rho_new = rho_core;
+              u(IM1,k,j,i) = 0.0; u(IM2,k,j,i) = 0.0; u(IM3,k,j,i) = 0.0;
+              w(IVX,k,j,i) = 0.0; w(IVY,k,j,i) = 0.0; w(IVZ,k,j,i) = 0.0;
+            } else {
+              // 抜くだけで足さない。中心核の密度より下げない。
+              rho_new = std::max(std::exp(-wgt*dt/tau)*rho_old, rho_core);
+              rho_new = std::min(rho_new, rho_old);
+              const Real g = rho_new / rho_old;
+              u(IM1,k,j,i) *= g; u(IM2,k,j,i) *= g; u(IM3,k,j,i) *= g;
+              // 同じ倍率で運動量を減らすので速度を保つ。保存変数とも同期する。
+              w(IVX,k,j,i) = u(IM1,k,j,i)/rho_new;
+              w(IVY,k,j,i) = u(IM2,k,j,i)/rho_new;
+              w(IVZ,k,j,i) = u(IM3,k,j,i)/rho_new;
+            }
+            u(IDN,k,j,i) = rho_new;
+            w(IDN,k,j,i) = rho_new;
+
+            if (active) {
+              const Real vol = pcoord->GetCellVolume(k,j,i);
+              if (rho_old > rho_new) {
+                reset_removed_mass_local += (rho_old - rho_new)*vol;
+              } else {
+                floor_added_mass_local += (rho_new - rho_old)*vol;
+              }
+              if (r < r_sink) sink_gas_mass_local += rho_new*vol;
+#if MAGNETIC_FIELDS_ENABLED
+              if (r < r_sink) {
+                const Real bmag = std::sqrt(b2);
+                b_max_sink_local = std::max(b_max_sink_local, bmag);
+                va_max_sink_local = std::max(va_max_sink_local,
+                                             bmag/std::sqrt(rho_new));
+              }
+#endif
+            }
+          }
+        }
+      }
+    }
+
+    Real dsum[4] = {flux_mass_local, reset_removed_mass_local,
+                    floor_added_mass_local, sink_gas_mass_local};
+    Real dmax[2] = {va_max_sink_local, b_max_sink_local};
+#ifdef MPI_PARALLEL
+    MPI_Allreduce(MPI_IN_PLACE, dsum, 4, MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, dmax, 2, MPI_ATHENA_REAL, MPI_MAX, MPI_COMM_WORLD);
+#endif
+    // 格子から抜いた正味の質量を星へ加える（質量は格子＋星で保存される）
+    const Real dm_star = dsum[1] - dsum[2];
+    if (!(std::isfinite(mstar_now + dm_star) && mstar_now + dm_star > 0.0)) {
+      std::stringstream msg;
+      msg << "Drain core replenishment exhausted Mstar; reduce sink_rho_core "
+             "or sink_va_max-induced density replenishment.";
+      ATHENA_ERROR(msg);
+    }
+    ruser_mesh_data[0](SINK_MSTAR) += dm_star;
+    // drain では Mflux_cum は符号つきの面の流束（照合用）、
+    // Mreset_cum は除去量、Mfloor_cum は中心核での補充量。
+    ruser_mesh_data[0](SINK_MFLUX_CUM) += dsum[0];
+    ruser_mesh_data[0](SINK_MRESET_CUM) += dsum[1];
+    ruser_mesh_data[0](SINK_MFLOOR_CUM) += dsum[2];
+    const Real idt = (dt > 0.0) ? 1.0/dt : 0.0;
+    ruser_mesh_data[0](SINK_MDOT_FLUX) = dsum[0]*idt;
+    ruser_mesh_data[0](SINK_MDOT_RESET) = dsum[1]*idt;
+    ruser_mesh_data[0](SINK_MDOT_FLOOR) = dsum[2]*idt;
+    ruser_mesh_data[0](SINK_MGAS) = dsum[3];
+    ruser_mesh_data[0](SINK_VA_MAX) = dmax[0];
+    ruser_mesh_data[0](SINK_B_MAX) = dmax[1];
+
+    if (Globals::my_rank == 0 && ncycle_out > 0 && ncycle % ncycle_out == 0) {
+      std::cout << "Sink(drain): Mstar=" << ruser_mesh_data[0](SINK_MSTAR)
+                << " dM_star=" << dm_star
+                << " dM_flux=" << dsum[0]
+                << " Msink_gas=" << dsum[3]
+                << " tau=" << tau << std::endl;
+    }
+    return;
   }
 
   // --------------------------------------------------------------------------
