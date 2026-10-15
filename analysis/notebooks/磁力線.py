@@ -58,6 +58,10 @@ plot_resolution = 700
 # 磁力線の密度
 stream_density = 1.5
 
+# True: 磁力線を描画する / False: 密度マップのみ描画する
+# Falseの場合はBx・Bzの格子補間とstreamplotも実行しない。
+draw_fieldlines_xz = True
+
 # x-z面の法線（y方向）に平均する半厚み。
 # 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
 slice_half_thickness_cells = 2.0
@@ -78,6 +82,7 @@ print("=== Output directories ===")
 print(f"Output root : {output_root}")
 print(f"Full images : {output_dir_full}")
 print(f"1/10 zoom   : {output_dir_zoom10}")
+print(f"Field lines : {'ON' if draw_fieldlines_xz else 'OFF'}")
 
 
 # ============================================================
@@ -754,7 +759,7 @@ def plot_xz_density_with_fieldlines(
     rho_grid = 10.0**log_rho_grid
 
     # --------------------------------------------------------
-    # Bx・Bzを補間
+    # Bx・Bzを補間（磁力線ON時のみ）
     # --------------------------------------------------------
 
     def interpolate_field(values):
@@ -785,27 +790,30 @@ def plot_xz_density_with_fieldlines(
             neginf=0.0
         )
 
-    Bx_grid = interpolate_field(
-        Bx_microgauss
-    )
+    if draw_fieldlines_xz:
+        Bx_grid = interpolate_field(
+            Bx_microgauss
+        )
 
-    Bz_grid = interpolate_field(
-        Bz_microgauss
-    )
+        Bz_grid = interpolate_field(
+            Bz_microgauss
+        )
 
-    Bproj_grid = np.hypot(
-        Bx_grid,
-        Bz_grid
-    )
+        Bproj_grid = np.hypot(
+            Bx_grid,
+            Bz_grid
+        )
+        has_projected_field = np.any(Bproj_grid > 0.0)
+    else:
+        Bx_grid = None
+        Bz_grid = None
+        Bproj_grid = None
+        has_projected_field = False
 
     # シンク球と断面の交差領域は、密度だけを白抜きにする。
     # 磁力線はシンク内部も含めて連続的に描画する。
     sink_mask_grid = np.hypot(X, Z) < sink_radius_au
     rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
-
-    has_projected_field = np.any(
-        Bproj_grid > 0.0
-    )
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")
@@ -831,7 +839,7 @@ def plot_xz_density_with_fieldlines(
         rasterized=True
     )
 
-    if has_projected_field:
+    if draw_fieldlines_xz and has_projected_field:
         ax.streamplot(
             x_grid,
             z_grid,
@@ -847,7 +855,7 @@ def plot_xz_density_with_fieldlines(
             integration_direction="both",
             broken_streamlines=False
         )
-    else:
+    elif draw_fieldlines_xz:
         ax.text(
             0.5,
             0.03,
@@ -929,8 +937,13 @@ def plot_xz_density_with_fieldlines(
         else ", 1/10 zoom"
     )
 
+    xz_title = (
+        "Density and projected magnetic field lines: x-z"
+        if draw_fieldlines_xz
+        else "Density: x-z"
+    )
     ax.set_title(
-        "Density and projected magnetic field lines: x-z\n"
+        f"{xz_title}\n"
         f"step={step:05d}, "
         f"t={time_kyr:.1f} kyr"
         f"{zoom_title}"
@@ -1210,6 +1223,10 @@ plot_resolution = 700
 # 磁力線の密度
 stream_density = 1.5
 
+# True: 磁力線を描画する / False: 密度マップのみ描画する
+# Falseの場合はBx・ByのDelaunay補間とstreamplotも実行しない。
+draw_fieldlines_xy = True
+
 # x-y面の法線（z方向）に平均する共通の半厚み [AU]。
 # AMRレベルによらず、全MeshBlockで同じ物理厚みを使う。
 slice_half_thickness_au = 1000.0
@@ -1244,6 +1261,7 @@ print(f"Output root : {output_root_xy}")
 print(f"Full images : {output_dir1}")
 print(f"1/10 zoom   : {output_dir2}")
 print(f"Plot mode   : {xy_plot_mode}")
+print(f"Field lines : {'ON' if draw_fieldlines_xy else 'OFF'}")
 
 
 # ============================================================
@@ -1963,12 +1981,17 @@ def plot_xy_density_with_fieldlines(
     source_points[:, 0] = x_AU[mask]
     source_points[:, 1] = y_AU[mask]
 
-    # rho, Bx, Byを1つの値配列にまとめ、Delaunay分割を1回だけ作る。
-    # 密度は従来どおりlog10空間で線形補間するため、描画精度は変わらない。
-    source_values = np.empty((number_of_source_points, 3), dtype=np.float64)
+    # 磁力線ON時はrho, Bx, Byを1配列にまとめ、Delaunay分割を1回にする。
+    # OFF時は密度だけを補間し、磁場用の格子配列を作らない。
+    number_of_channels = 3 if draw_fieldlines_xy else 1
+    source_values = np.empty(
+        (number_of_source_points, number_of_channels),
+        dtype=np.float64,
+    )
     source_values[:, 0] = np.log10(rho_cgs[mask])
-    source_values[:, 1] = Bx_microG[mask]
-    source_values[:, 2] = By_microG[mask]
+    if draw_fieldlines_xy:
+        source_values[:, 1] = Bx_microG[mask]
+        source_values[:, 2] = By_microG[mask]
 
     # ここから先はsource_points/source_valuesだけを使う。
     # 単位変換後の全セル配列をQhullと同時に保持しない。
@@ -1994,57 +2017,65 @@ def plot_xy_density_with_fieldlines(
         interpolated[missing, :] = source_values[nearest_indices, :]
         del nearest_indices, missing_points, tree
 
-    # 各チャネルを独立配列にし、3成分の親配列を解放可能にする。
+    # 各チャネルを独立配列にし、親配列を解放可能にする。
     log_rho_grid = interpolated[..., 0].copy()
-    Bx_grid = interpolated[..., 1].copy()
-    By_grid = interpolated[..., 2].copy()
     rho_grid = np.power(10.0, log_rho_grid)
+
+    if draw_fieldlines_xy:
+        Bx_grid = interpolated[..., 1].copy()
+        By_grid = interpolated[..., 2].copy()
+    else:
+        Bx_grid = None
+        By_grid = None
 
     # Qhullの大きな一時構造は描画処理の前に参照を外す。
     del linear_interpolator, triangulation
     del source_points, source_values, interpolated, log_rho_grid, missing
     gc.collect()
 
-    Bx_grid = np.nan_to_num(
-        Bx_grid,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
+    if draw_fieldlines_xy:
+        Bx_grid = np.nan_to_num(
+            Bx_grid,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0
+        )
 
-    By_grid = np.nan_to_num(
-        By_grid,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
+        By_grid = np.nan_to_num(
+            By_grid,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0
+        )
 
-    # x-y面内の磁場強度。弱磁場を除外する閾値は設けない。
-    # 方向だけをstreamplotへ渡すことで、絶対強度が非常に小さくても
-    # 同じ磁力線形状を追跡できるようにする。
-    Bproj_grid = np.hypot(Bx_grid, By_grid)
-    nonzero_projected_field = Bproj_grid > 0.0
+        # 弱磁場を除外する閾値は設けない。方向だけをstreamplotへ渡す。
+        Bproj_grid = np.hypot(Bx_grid, By_grid)
+        nonzero_projected_field = Bproj_grid > 0.0
 
-    Bx_direction = np.divide(
-        Bx_grid,
-        Bproj_grid,
-        out=np.zeros_like(Bx_grid),
-        where=nonzero_projected_field,
-    )
-    By_direction = np.divide(
-        By_grid,
-        Bproj_grid,
-        out=np.zeros_like(By_grid),
-        where=nonzero_projected_field,
-    )
+        Bx_direction = np.divide(
+            Bx_grid,
+            Bproj_grid,
+            out=np.zeros_like(Bx_grid),
+            where=nonzero_projected_field,
+        )
+        By_direction = np.divide(
+            By_grid,
+            Bproj_grid,
+            out=np.zeros_like(By_grid),
+            where=nonzero_projected_field,
+        )
+        has_projected_field = np.any(nonzero_projected_field)
+    else:
+        Bproj_grid = None
+        nonzero_projected_field = None
+        Bx_direction = None
+        By_direction = None
+        has_projected_field = False
 
     # シンク球と断面の交差領域は、密度だけを白抜きにする。
     # 磁力線はシンク内部も含めて連続的に描画する。
     sink_mask_grid = np.hypot(X, Y) < sink_radius_au
     rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
-
-    # 全領域で完全にBx=By=0の場合だけ磁力線を描けない。
-    has_projected_field = np.any(nonzero_projected_field)
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")
@@ -2071,7 +2102,7 @@ def plot_xy_density_with_fieldlines(
         rasterized=True
     )
 
-    if has_projected_field:
+    if draw_fieldlines_xy and has_projected_field:
         ax.streamplot(
             x_grid,
             y_grid,
@@ -2088,7 +2119,7 @@ def plot_xy_density_with_fieldlines(
             # 他の磁力線に近づいても積分を打ち切らない
             broken_streamlines=False
         )
-    else:
+    elif draw_fieldlines_xy:
         ax.text(
             0.50,
             0.03,
@@ -2158,8 +2189,13 @@ def plot_xy_density_with_fieldlines(
         rf"$y\ [10^{{{scale_exponent}}}\ {{\rm AU}}]$"
     )
 
+    xy_title = (
+        "Density and projected magnetic field lines: x-y midplane"
+        if draw_fieldlines_xy
+        else "Density: x-y midplane"
+    )
     ax.set_title(
-        "Density and projected magnetic field lines: x-y midplane\n"
+        f"{xy_title}\n"
         f"step={step:05d}, "
         f"t={time_kyr:.1f} kyr"
     )
