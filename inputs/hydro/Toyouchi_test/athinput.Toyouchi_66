@@ -14,12 +14,12 @@ problem_id = Toyouchi    # problem ID: basename of output filenames
 
 <output1>
 file_type  = hst        # History data dump
-dt         = 0.50218964686795 # code time [kyr]; preserves previous interval
+dt         = 0.2 # code time [kyr]
 
 <output2>
 file_type  = vtk        # Binary data dump
 variable   = prim,gr_nfw,gr_star,gself_x,gself_y,gself_z,apres_x,apres_y,apres_z,amag_x,amag_y,amag_z       # variables to be output
-dt         = 0.50173207087991 # code time [kyr]; preserves previous interval
+dt         = 0.2 # code time [kyr]
 ghost_zones= false
 
 <output3>
@@ -28,8 +28,8 @@ dt        = 10.032353537658 # code time [kyr]
 
 <time>
 cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim       = -1      # cycle limit for short tests
-tlim       = 20.0 # code time [kyr]; preserves previous duration
+nlim       = -1      # -1は無制限
+tlim       = 20.0 # code time [kyr]
 integrator  = vl2       # time integration algorithm
 xorder      = 2         # order of spatial reconstruction
 ncycle_out  = 1         # interval for stdout summary info
