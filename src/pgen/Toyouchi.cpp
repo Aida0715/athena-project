@@ -16,6 +16,7 @@
 #include <sstream>    // stringstream
 #include <string>     // c_str()
 #include <fstream>    // 追加
+#include <iomanip>    // setprecision
 #include <vector>     // 追加
 #include <utility>    // 追加
 #include <cstdint>    // white noise
@@ -117,6 +118,132 @@ Real mstar_fixed = 1.0;  // Fixed stellar mass in code units.
 Real vr_taper_au = 580.0;
 Real core_a, core_b, core_c, core_d, core_mass_msun;
 Real taper_velocity_kms, taper_a, taper_b;
+extern const Real mass_coeff[8];
+extern const Real velocity_coeff[8];
+extern Real bz_microgauss;
+extern Real bz_code;
+extern Real Bunit;
+bool metadata_written = false;
+
+std::string JsonEscape(const std::string &input) {
+  std::ostringstream escaped;
+  for (std::string::const_iterator it = input.begin(); it != input.end(); ++it) {
+    switch (*it) {
+      case '"': escaped << "\\\""; break;
+      case '\\': escaped << "\\\\"; break;
+      case '\n': escaped << "\\n"; break;
+      case '\r': escaped << "\\r"; break;
+      case '\t': escaped << "\\t"; break;
+      default: escaped << *it; break;
+    }
+  }
+  return escaped.str();
+}
+
+const char *JsonBool(bool value) { return value ? "true" : "false"; }
+
+void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
+                           Real sound_speed_kms, Real epsilon_au) {
+  if (Globals::my_rank != 0 || metadata_written) return;
+
+  const std::string problem_id = pin->GetString("job", "problem_id");
+  const std::string filename = problem_id + ".metadata.json";
+  const std::string temporary = filename + ".tmp";
+  const Real sound_speed_code = sound_speed_kms * 1.0e5 / Vunit;
+  const Real density_floor_code = pin->GetReal("hydro", "dfloor");
+  const Real cfl_number = pin->GetReal("time", "cfl_number");
+  const Real gamma_input = pin->GetReal("hydro", "gamma");
+  const Real pressure_unit = Rhounit * Vunit * Vunit;
+  const Real acceleration_unit = Lunit / (Tunit*Tunit);
+
+  std::ofstream out(temporary.c_str(), std::ios::out | std::ios::trunc);
+  if (!out.is_open()) {
+    std::stringstream msg;
+    msg << "Could not open Toyouchi metadata file: " << temporary;
+    ATHENA_ERROR(msg);
+  }
+  out << std::setprecision(17);
+  out << "{\n"
+      << "  \"format\": \"Toyouchi runtime metadata\",\n"
+      << "  \"format_version\": 1,\n"
+      << "  \"problem_id\": \"" << JsonEscape(problem_id) << "\",\n"
+      << "  \"units\": {\n"
+      << "    \"unit_system\": \"custom\",\n"
+      << "    \"mass_cgs\": " << Munit << ",\n"
+      << "    \"length_cgs\": " << Lunit << ",\n"
+      << "    \"time_cgs\": " << Tunit << ",\n"
+      << "    \"velocity_cgs\": " << Vunit << ",\n"
+      << "    \"density_cgs\": " << Rhounit << ",\n"
+      << "    \"pressure_cgs\": " << pressure_unit << ",\n"
+      << "    \"magnetic_field_gauss\": " << Bunit << ",\n"
+      << "    \"acceleration_cgs\": " << acceleration_unit << ",\n"
+      << "    \"gravity_constant_code\": " << gconst << "\n"
+      << "  },\n"
+      << "  \"hydro\": {\n"
+      << "    \"eos\": \"" << (NON_BAROTROPIC_EOS ? "adiabatic" : "isothermal") << "\",\n"
+      << "    \"gamma_input\": " << gamma_input << ",\n"
+      << "    \"sound_speed_kms\": " << sound_speed_kms << ",\n"
+      << "    \"sound_speed_code\": " << sound_speed_code << ",\n"
+      << "    \"density_floor_code\": " << density_floor_code << ",\n"
+      << "    \"cfl_number\": " << cfl_number << "\n"
+      << "  },\n"
+      << "  \"gravity\": {\n"
+      << "    \"central_enabled\": " << JsonBool(use_central_gravity) << ",\n"
+      << "    \"nfw_enabled\": " << JsonBool(use_nfw_gravity) << ",\n"
+      << "    \"self_gravity_enabled\": " << JsonBool(SELF_GRAVITY_ENABLED) << ",\n"
+      << "    \"mstar_code\": " << mstar_fixed << ",\n"
+      << "    \"mstar_msun\": " << mstar_fixed*Munit/Msun << ",\n"
+      << "    \"softening_au\": " << epsilon_au << ",\n"
+      << "    \"softening_code\": " << epsilon_soft << "\n"
+      << "  },\n"
+      << "  \"initial_conditions\": {\n"
+      << "    \"rotation_enabled\": " << JsonBool(use_rotation) << ",\n"
+      << "    \"radial_inflow_enabled\": " << JsonBool(use_radial_inflow) << ",\n"
+      << "    \"density_noise_enabled\": " << JsonBool(use_density_noise) << ",\n"
+      << "    \"density_noise_percent\": " << density_noise_percent << ",\n"
+      << "    \"density_noise_seed\": " << density_noise_seed << ",\n"
+      << "    \"fit_rmin_au\": " << fit_rmin_au << ",\n"
+      << "    \"fit_rmax_au\": " << fit_rmax_au << ",\n"
+      << "    \"vr_taper_au\": " << vr_taper_au << ",\n"
+      << "    \"mass_fit_coefficients\": [";
+  for (int n = 0; n < 8; ++n) out << (n == 0 ? "" : ", ") << mass_coeff[n];
+  out << "],\n    \"velocity_fit_coefficients\": [";
+  for (int n = 0; n < 8; ++n) out << (n == 0 ? "" : ", ") << velocity_coeff[n];
+  out << "],\n"
+      << "    \"core_mass_msun\": " << core_mass_msun << ",\n"
+      << "    \"core_coefficients\": [" << core_a << ", " << core_b << ", "
+      << core_c << ", " << core_d << "],\n"
+      << "    \"velocity_taper_coefficients\": [" << taper_velocity_kms << ", "
+      << taper_a << ", " << taper_b << "]\n"
+      << "  },\n"
+      << "  \"magnetic_field\": {\n"
+      << "    \"enabled_at_compile_time\": " << JsonBool(MAGNETIC_FIELDS_ENABLED) << ",\n"
+      << "    \"initial_bz_microgauss\": " << bz_microgauss << ",\n"
+      << "    \"initial_bz_code\": " << bz_code << "\n"
+      << "  },\n"
+      << "  \"mesh\": {\n"
+      << "    \"x1min_code\": " << pm->mesh_size.x1min << ",\n"
+      << "    \"x1max_code\": " << pm->mesh_size.x1max << ",\n"
+      << "    \"x2min_code\": " << pm->mesh_size.x2min << ",\n"
+      << "    \"x2max_code\": " << pm->mesh_size.x2max << ",\n"
+      << "    \"x3min_code\": " << pm->mesh_size.x3min << ",\n"
+      << "    \"x3max_code\": " << pm->mesh_size.x3max << "\n"
+      << "  }\n"
+      << "}\n";
+  out.close();
+  if (!out) {
+    std::stringstream msg;
+    msg << "Failed while writing Toyouchi metadata file: " << temporary;
+    ATHENA_ERROR(msg);
+  }
+  if (std::rename(temporary.c_str(), filename.c_str()) != 0) {
+    std::stringstream msg;
+    msg << "Could not finalize Toyouchi metadata file: " << filename;
+    ATHENA_ERROR(msg);
+  }
+  metadata_written = true;
+  std::cout << "Toyouchi runtime metadata: " << filename << std::endl;
+}
 
 // ===== magnetic field =====
 Real bz_microgauss = 0.0;  // input value [microgauss]
@@ -626,6 +753,13 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
 // これらはcell-centered量の2次中心差分であり、Riemann solverが用いる
   // 離散fluxそのものではない。特に細分化境界では微分誤差に注意する。
 void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
+  // Athena++ changes into the run directory before this callback, so the metadata
+  // file is placed beside the VTK output. The rank/process guard makes this a
+  // one-time write even though the callback runs once per local MeshBlock.
+  WriteToyouchiMetadata(pmy_mesh, pin,
+                        pin->GetReal("hydro", "sound_speed_kms"),
+                        pin->GetReal("problem", "epsilon_au"));
+
   AthenaArray<Real> &w = phydro->w;
   Coordinates *coord = pcoord;
 
