@@ -8,7 +8,7 @@
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=3.9954968108039886（L0=100 AU, T0=1 kyr）
+#   ・等温音速 cs=17.346823586722763（8.22321048489829 km/s）
 #   ・Athena++規格：Pmag=B^2/2
 #
 # 必要パッケージ：numpy, scipy, matplotlib, pyvista
@@ -43,7 +43,7 @@ output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
 
 # 等温音速（コード単位）
-CS_CODE = 3.9954968108039886
+CS_CODE = 17.346823586722763
 
 # βの共通表示範囲。添付図と同じく 10^-1 ～ 10^2
 # 自動範囲にしたい場合は両方をNoneにする
@@ -556,7 +556,7 @@ print(f"1/10 zoom images   : {len(saved_zoom10)} -> {output_dir_zoom10}")
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=3.9954968108039886（L0=100 AU, T0=1 kyr）
+#   ・等温音速 cs=17.346823586722763（8.22321048489829 km/s）
 #   ・Athena++規格：Pmag=B^2/2
 #   ・x-z面への投影磁場(Bx,Bz)を細い黒線で重ねる
 #
@@ -592,7 +592,7 @@ output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
 
 # 等温音速（コード単位）
-CS_CODE = 3.9954968108039886
+CS_CODE = 17.346823586722763
 
 # βの共通表示範囲：全stepの1--99 percentileから自動決定
 BETA_VMIN = None

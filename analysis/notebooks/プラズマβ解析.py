@@ -47,7 +47,7 @@ analysis_bounds_au = None
 analysis_bounds_code = None
 
 # athinput.Toyouchi_63の新単位系（L0=100 AU, T0=1 kyr）に対応する等温音速。
-ISO_SOUND_SPEED_CODE = 3.9954968108039886
+ISO_SOUND_SPEED_CODE = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 vtk_output_number = 2
 
 output_dir = Path("./plasma_beta_history").resolve()

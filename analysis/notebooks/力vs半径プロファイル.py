@@ -26,8 +26,57 @@ L_UNIT_CGS = 1.495978707e15
 T_UNIT_CGS = 3.15576e10
 G_CGS = 6.67430e-8
 G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
+AU_CGS = 1.495978707e13
+MSUN_CGS = 1.98847e33
+LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
+RHO_UNIT_CGS = M_UNIT_CGS / L_UNIT_CGS**3
+
+FIT_RMIN_AU = 139.9720348
+FIT_RMAX_AU = 146698.0663
+MASS_COEFF = np.array([
+    4.948071878736e-02, -1.267318191930e+00, 1.374036982238e+01,
+    -8.163479027134e+01, 2.867189886433e+02, -5.954534679897e+02,
+    6.808026360863e+02, -3.349246300414e+02,
+])
+_x_core = np.log10(FIT_RMIN_AU)
+_dmass_coeff = np.polyder(MASS_COEFF)
+_slope_core = np.polyval(_dmass_coeff, _x_core)
+_curvature_core = np.polyval(np.polyder(MASS_COEFF, 2), _x_core) / np.log(10.0)
+_core_mass_msun = 10.0**np.polyval(MASS_COEFF, _x_core)
+_core_c = (_curvature_core + _slope_core**2 - 8.0*_slope_core + 15.0) / 8.0
+_core_b = (_slope_core - 3.0) / 2.0 - 2.0*_core_c
+_core_a = 1.0 - _core_b - _core_c
+_bump = max(0.0, 0.25 - _core_a)
+_core_a += _bump
+_core_b -= 3.0*_bump
+_core_c += 3.0*_bump
+_core_d = -_bump
+
+
+def wise19_profiles_code(r_code):
+    r_au = np.asarray(r_code, dtype=float) * LENGTH_UNIT_AU
+    clipped = np.clip(r_au, FIT_RMIN_AU, FIT_RMAX_AU)
+    x = np.log10(clipped)
+    mass_msun = 10.0**np.polyval(MASS_COEFF, x)
+    rho_code = (
+        MSUN_CGS / (4.0*np.pi*AU_CGS**3*RHO_UNIT_CGS)
+        * 10.0**(np.polyval(MASS_COEFF, x) - 3.0*x)
+        * np.polyval(_dmass_coeff, x)
+    )
+    inner = r_au < FIT_RMIN_AU
+    if np.any(inner):
+        t = np.maximum(r_au[inner], 0.0) / FIT_RMIN_AU
+        mass_msun[inner] = _core_mass_msun*t**3 * (
+            _core_a + t**2*(_core_b + t**2*(_core_c + _core_d*t**2))
+        )
+        rm = FIT_RMIN_AU * AU_CGS
+        rho_code[inner] = (
+            _core_mass_msun*MSUN_CGS/(4.0*np.pi*rm**3*RHO_UNIT_CGS)
+            * (3.0*_core_a + t**2*(5.0*_core_b + t**2*(7.0*_core_c + 9.0*_core_d*t**2)))
+        )
+    return mass_msun*MSUN_CGS/M_UNIT_CGS, rho_code
 Mstar = 1.0
-cs = 3.9954968108039886  # 1.8940534618758 km/s for L0=100 AU, T0=1 kyr
+cs = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 
 z_cut = 2.0  # midplane
 
@@ -192,11 +241,8 @@ for step, files in step_dict.items():
     # 各力(理論)
     # ===============================
     r_th = bin_centers
-    # --- 密度 ---
-    rho_th = 0.11 * r_th**(-1.75)
-
-    # --- 包含質量（ガスのみ） ---
-    M_enc = (4.0 * np.pi * 0.11 * r_th**1.25) / 1.25
+    # --- Wise et al. (2019) 密度と包有質量（Toyouchi.cpp と同一） ---
+    M_enc, rho_th = wise19_profiles_code(r_th)
 
     # --- 回転 ---
     vphi_th = 0.5 * np.sqrt(G * M_enc / np.maximum(r_th, 1e-12))

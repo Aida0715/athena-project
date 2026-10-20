@@ -22,7 +22,7 @@ from pathlib import Path
 
 # IDEから実行するときの設定。対象runの値に変更する。
 DATADIR = "~/athena-project/results/〇〇"
-ISO_SOUND_SPEED_CODE = 3.9954968108039886
+ISO_SOUND_SPEED_CODE = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 OUTPUT_DIR = "./jeans_diagnostics"
 THRESHOLDS = (4, 8, 16, 32)
 # 全領域を診断。中心のみなら例: ((-5000, 5000),) * 3 [au]

@@ -23,6 +23,44 @@ L_UNIT_CGS = 1.495978707e15
 T_UNIT_CGS = 3.15576e10
 G_CGS = 6.67430e-8
 G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
+AU_CGS = 1.495978707e13
+MSUN_CGS = 1.98847e33
+LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
+
+# Wise et al. (2019) 包有質量フィット（Toyouchi.cpp と同一）
+FIT_RMIN_AU = 139.9720348
+FIT_RMAX_AU = 146698.0663
+MASS_COEFF = np.array([
+    4.948071878736e-02, -1.267318191930e+00, 1.374036982238e+01,
+    -8.163479027134e+01, 2.867189886433e+02, -5.954534679897e+02,
+    6.808026360863e+02, -3.349246300414e+02,
+])
+
+_x_core = np.log10(FIT_RMIN_AU)
+_slope_core = np.polyval(np.polyder(MASS_COEFF), _x_core)
+_curvature_core = np.polyval(np.polyder(MASS_COEFF, 2), _x_core) / np.log(10.0)
+_core_mass_msun = 10.0**np.polyval(MASS_COEFF, _x_core)
+_core_c = (_curvature_core + _slope_core**2 - 8.0*_slope_core + 15.0) / 8.0
+_core_b = (_slope_core - 3.0) / 2.0 - 2.0*_core_c
+_core_a = 1.0 - _core_b - _core_c
+_bump = max(0.0, 0.25 - _core_a)
+_core_a += _bump
+_core_b -= 3.0*_bump
+_core_c += 3.0*_bump
+_core_d = -_bump
+
+
+def menc_wise19_code(r_code):
+    r_au = np.asarray(r_code, dtype=float) * LENGTH_UNIT_AU
+    clipped = np.clip(r_au, FIT_RMIN_AU, FIT_RMAX_AU)
+    mass_msun = 10.0**np.polyval(MASS_COEFF, np.log10(clipped))
+    inner = r_au < FIT_RMIN_AU
+    if np.any(inner):
+        t = np.maximum(r_au[inner], 0.0) / FIT_RMIN_AU
+        mass_msun[inner] = _core_mass_msun*t**3 * (
+            _core_a + t**2*(_core_b + t**2*(_core_c + _core_d*t**2))
+        )
+    return mass_msun * MSUN_CGS / M_UNIT_CGS
 
 z_cut = 2.0
 
@@ -58,12 +96,8 @@ bin_centers = np.sqrt(bin_edges[:-1] * bin_edges[1:])
 # 理論 Vphi（cppと一致）
 # ======================================
 def theoretical_vphi(r):
-
-    M_gas = 4.0 * np.pi * 0.11 * r**1.25 / 1.25
-
-    vphi = 0.5 * np.sqrt(G * M_gas / np.maximum(r, 1e-12))
-
-    return vphi
+    M_gas = menc_wise19_code(r)
+    return 0.5 * np.sqrt(G * M_gas / np.maximum(r, 1e-12))
 
 # ======================================
 # timestep loop

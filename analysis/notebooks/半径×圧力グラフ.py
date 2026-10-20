@@ -2,7 +2,7 @@
 # Converted from 半径×圧力グラフ.ipynb
 
 # %% cell 1
-#半径vs圧力グラフ　出力されるconsデータから作っている（jeans_3d-test14を可視化したときに使った）
+# Toyouchi 等温計算の半径vs圧力グラフ
 
 import os
 import numpy as np
@@ -10,14 +10,14 @@ import pyvista as pv
 import matplotlib.pyplot as plt
 import natsort
 
-vtk_dir = os.path.expanduser("~/athenapp/results/〇〇")
+vtk_dir = os.path.expanduser("~/athena-project/results/〇〇")
 
 # 球・計算領域
-xc, yc, zc = 6.0, 6.0, 6.0     # 球中心
-r_max = 6.0                   # 評価する最大半径
+xc, yc, zc = 0.0, 0.0, 0.0     # 球中心
+r_max = 1000.0                # 評価する最大半径 [code length]
 n_bins = 200                  # 球殻数（滑らかさはここ）
 
-gamma = 1.20                  # ★ Athena++ input と必ず一致させる
+cs_code = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 
 # 出力
 output_dir = "./radial_pressure_profiles"
@@ -29,7 +29,7 @@ os.makedirs(output_dir, exist_ok=True)
 vtk_files = natsort.natsorted([
     os.path.join(vtk_dir, f)
     for f in os.listdir(vtk_dir)
-    if f.startswith("Jeans.block") and f.endswith(".vtk")
+    if f.startswith("Toyouchi.block") and f.endswith(".vtk")
 ])
 
 step_dict = {}
@@ -68,20 +68,9 @@ for step, files in step_dict.items():
     dz = z - zc
     r = np.sqrt(dx*dx + dy*dy + dz*dz)
 
-    # --- 保存量 ---
-    rho  = grid.cell_data["dens"]
-    Etot = grid.cell_data["Etot"]
-    phi  = grid.cell_data["phi"]
-    mom  = grid.cell_data["mom"]   # (N,3)
-
-    # --- 速度 ---
-    vx = mom[:, 0] / rho
-    vy = mom[:, 1] / rho
-    vz = mom[:, 2] / rho
-    v2 = vx*vx + vy*vy + vz*vz
-
-    # --- 圧力（最重要） ---
-    P = (gamma - 1.0) * (Etot - 0.5 * rho * v2 - rho * phi)
+    # --- 等温圧力 P = rho * cs^2 ---
+    rho = np.asarray(grid.cell_data["rho"], dtype=float)
+    P = rho * cs_code**2
 
     # --- 有効セルのみ ---
     valid = (
@@ -150,4 +139,3 @@ for step, files in step_dict.items():
     print(f"Saved {png}")
 
 print("Done.")
-
