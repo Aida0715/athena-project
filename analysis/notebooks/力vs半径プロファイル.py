@@ -1,323 +1,219 @@
 # -*- coding: utf-8 -*-
-# Converted from 力vs半径プロファイル.ipynb
+"""Toyouchi VTK の球平均加速度・動径速度。
 
-# %% cell 1
-#Toyouchi-test16の可視化に使った
-#重力（中心星）＋遠心力＋圧力勾配をプロットするコード
+必要環境: numpy, matplotlib, pyvista。datadir を変更して実行する。
+MeshBlock ごとに処理し、セル体積（または質量）で重み付けする。
+領域は VTK bounds から取得。完全な球殻が入る最大半径を既定にする。
+中心は領域中央（中心天体がそこにある計算用）。必要なら CENTER を指定。
 
-import pyvista as pv
+gr_nfw は現行 Toyouchi.cpp では softened radius s でのスカラー値。
+真の動径成分は gr_nfw*r/s だが、epsilon は VTK に保存されていない。
+したがって参考線としてのみ表示し、合計には含めない。
+gr_star/gr_nfw は初期出力では未評価のゼロの場合がある。
+合計は局所動径運動の右辺の平均であり、平均速度の時間微分ではない。
+"""
+# %% 設定
+from pathlib import Path
+import re
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
-import os
-import natsort
+import pyvista as pv
 
-# ===============================
-# パラメータ
-# ===============================
-vtk_dir = os.path.expanduser("~/athena-project/results/Toyouchi-test16")
+# Toyouchi-test76 の <units>
+L_UNIT_CM = 1.495978707e15       # 100 AU
+T_UNIT_S = 3.15576e10            # 1 kyr
+AU_CM = 1.495978707e13
+LENGTH_UNIT_AU = L_UNIT_CM / AU_CM
+VELOCITY_UNIT_KMS = (L_UNIT_CM / T_UNIT_S) / 1.0e5
+ACCELERATION_UNIT_CGS = L_UNIT_CM / T_UNIT_S**2
 
-xc, yc, zc = 0.0, 0.0, 0.0
+DATADIR = Path('~/athena-project/results/〇〇').expanduser()
+OUTPUT_DIR = Path('./radial_acceleration_profiles')
+VTK_PATTERN = '*.block*.vtk'
+STEPS = None                 # None: 全ステップ、例: [0, 25, 50, 100]
+N_BINS = 60
+CENTER = None                # None: 領域中央、または (x, y, z) [code]
+WEIGHT = 'volume'            # 'volume' / 'mass'
+FULL_SHELLS_ONLY = True      # False: 隅まで含む（外側は部分球殻）
 
-r_max = 224.0
-n_bins = 25
-
-M_UNIT_CGS = 3.97694e33
-L_UNIT_CGS = 1.495978707e15
-T_UNIT_CGS = 3.15576e10
-G_CGS = 6.67430e-8
-G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
-AU_CGS = 1.495978707e13
-MSUN_CGS = 1.98847e33
-LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
-RHO_UNIT_CGS = M_UNIT_CGS / L_UNIT_CGS**3
-
-FIT_RMIN_AU = 139.9720348
-FIT_RMAX_AU = 146698.0663
-MASS_COEFF = np.array([
-    4.948071878736e-02, -1.267318191930e+00, 1.374036982238e+01,
-    -8.163479027134e+01, 2.867189886433e+02, -5.954534679897e+02,
-    6.808026360863e+02, -3.349246300414e+02,
-])
-_x_core = np.log10(FIT_RMIN_AU)
-_dmass_coeff = np.polyder(MASS_COEFF)
-_slope_core = np.polyval(_dmass_coeff, _x_core)
-_curvature_core = np.polyval(np.polyder(MASS_COEFF, 2), _x_core) / np.log(10.0)
-_core_mass_msun = 10.0**np.polyval(MASS_COEFF, _x_core)
-_core_c = (_curvature_core + _slope_core**2 - 8.0*_slope_core + 15.0) / 8.0
-_core_b = (_slope_core - 3.0) / 2.0 - 2.0*_core_c
-_core_a = 1.0 - _core_b - _core_c
-_bump = max(0.0, 0.25 - _core_a)
-_core_a += _bump
-_core_b -= 3.0*_bump
-_core_c += 3.0*_bump
-_core_d = -_bump
+VECTORS = {'self': 'gself', 'pressure': 'apres', 'magnetic': 'amag'}
+LABELS = {
+    'self': 'Gas self-gravity', 'star': 'Central star',
+    'nfw': 'NFW stored scalar (reference)', 'pressure': 'Pressure',
+    'rotation': 'Azimuthal motion', 'polar': 'Polar motion',
+    'magnetic': 'Magnetic', 'sum': 'Sum excluding NFW',
+}
 
 
-def wise19_profiles_code(r_code):
-    r_au = np.asarray(r_code, dtype=float) * LENGTH_UNIT_AU
-    clipped = np.clip(r_au, FIT_RMIN_AU, FIT_RMAX_AU)
-    x = np.log10(clipped)
-    mass_msun = 10.0**np.polyval(MASS_COEFF, x)
-    rho_code = (
-        MSUN_CGS / (4.0*np.pi*AU_CGS**3*RHO_UNIT_CGS)
-        * 10.0**(np.polyval(MASS_COEFF, x) - 3.0*x)
-        * np.polyval(_dmass_coeff, x)
-    )
-    inner = r_au < FIT_RMIN_AU
-    if np.any(inner):
-        t = np.maximum(r_au[inner], 0.0) / FIT_RMIN_AU
-        mass_msun[inner] = _core_mass_msun*t**3 * (
-            _core_a + t**2*(_core_b + t**2*(_core_c + _core_d*t**2))
-        )
-        rm = FIT_RMIN_AU * AU_CGS
-        rho_code[inner] = (
-            _core_mass_msun*MSUN_CGS/(4.0*np.pi*rm**3*RHO_UNIT_CGS)
-            * (3.0*_core_a + t**2*(5.0*_core_b + t**2*(7.0*_core_c + 9.0*_core_d*t**2)))
-        )
-    return mass_msun*MSUN_CGS/M_UNIT_CGS, rho_code
-Mstar = 1.0
-cs = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
+def collect_steps(directory):
+    groups = {}
+    for path in directory.glob(VTK_PATTERN):
+        match = re.search(r'\.(\d+)\.vtk$', path.name)
+        if match:
+            step = int(match.group(1))
+            if STEPS is None or step in STEPS:
+                groups.setdefault(step, []).append(path)
+    if not groups:
+        raise FileNotFoundError(f'No matching VTK files: {directory / VTK_PATTERN}')
+    return {step: sorted(paths) for step, paths in sorted(groups.items())}
 
-z_cut = 2.0  # midplane
 
-# 出力
-output_dir1 = "./force_profiles1"
-output_dir2 = "./force_profiles2"
-os.makedirs(output_dir1, exist_ok=True)
-os.makedirs(output_dir2, exist_ok=True)
+def load(path):
+    grid = pv.read(path)
+    required = ['rho', 'vel', 'Bcc', 'gr_star', 'gr_nfw']
+    required += [f'{prefix}_{axis}' for prefix in VECTORS.values() for axis in 'xyz']
+    missing = [name for name in required if name not in grid.cell_data]
+    if missing:
+        raise KeyError(f'{path}: missing cell variables {missing}')
+    return grid
 
-# ===============================
-# VTK整理
-# ===============================
-vtk_files = natsort.natsorted([
-    os.path.join(vtk_dir, f)
-    for f in os.listdir(vtk_dir)
-    if f.startswith("Toyouchi.block") and f.endswith(".vtk")
-])
 
-step_dict = {}
-for f in vtk_files:
-    step = f.split('.')[-2]
-    step_dict.setdefault(step, []).append(f)
-
-print(f"Found {len(step_dict)} timesteps")
-
-# ===============================
-# ビン
-# ===============================
-bin_edges = np.logspace(np.log10(1.5), np.log10(r_max), n_bins + 1)
-bin_centers = np.sqrt(bin_edges[:-1] * bin_edges[1:])
-
-# ===============================
-# timestep loop
-# ===============================
-for step, files in step_dict.items():
-
-    print(f"Processing step {step}")
-
-    blocks = [pv.read(f) for f in files]
-    grid = pv.MultiBlock(blocks).combine()
-
-    centers = grid.cell_centers().points
-
-    # ===== 物理量 =====
-    rho = grid["rho"]
-    vel = grid["vel"]
-
-    vx = vel[:, 0]
-    vy = vel[:, 1]
-    vz = vel[:, 2]
-
-    # ===== 座標 =====
-    dx = centers[:, 0] - xc
-    dy = centers[:, 1] - yc
-    dz = centers[:, 2] - zc
-
-    r = np.sqrt(dx*dx + dy*dy + dz*dz)
-    r_cyl = np.sqrt(dx*dx + dy*dy)
-
-    # 単位ベクトル
-    r_hat_x = dx / np.maximum(r, 1e-12)
-    r_hat_y = dy / np.maximum(r, 1e-12)
-    r_hat_z = dz / np.maximum(r, 1e-12)
-
-    # midplane制限
-    midplane = np.abs(dz) < z_cut
-
-    # ===============================
-    # 遠心力
-    # ===============================
-    vphi = (-dy * vx + dx * vy) / np.maximum(r_cyl, 1e-12)
-    F_cent = vphi**2 / np.maximum(r_cyl, 1e-12)
-
-    # ===============================
-    # 重力
-    # ===============================
-
-    # 中心星
-    F_star = -G * Mstar / np.maximum(r, 1e-12)**2
-
-    # 自己重力（phiから計算）
-    if "phi" in grid.array_names:
-
-        phi = grid["phi"]
-
-        # 勾配（cellベース）
-        grad = grid.compute_derivative(scalars="phi", gradient=True)
-        grad_phi = grad["gradient"]
-
-        gx = -grad_phi[:, 0]
-        gy = -grad_phi[:, 1]
-        gz = -grad_phi[:, 2]
-
-        F_self = gx*r_hat_x + gy*r_hat_y + gz*r_hat_z
-
+def geometry(paths):
+    bounds = []
+    for path in paths:
+        bounds.append(np.asarray(pv.read(path).bounds).reshape(3, 2))
+    bounds = np.asarray(bounds)
+    lo, hi = bounds[:, :, 0].min(axis=0), bounds[:, :, 1].max(axis=0)
+    center = (lo + hi) / 2 if CENTER is None else np.asarray(CENTER, dtype=float)
+    if center.shape != (3,) or np.any(center <= lo) or np.any(center >= hi):
+        raise ValueError('CENTER must lie strictly inside the domain')
+    if FULL_SHELLS_ONLY:
+        rmax = np.min(np.r_[center - lo, hi - center])
     else:
-        print("WARNING: phi not found → self-gravity ignored")
-        F_self = 0.0
+        rmax = np.linalg.norm(np.maximum(center - lo, hi - center))
+    rmin = np.inf
+    for path in paths:
+        radius = np.linalg.norm(pv.read(path).cell_centers().points - center, axis=1)
+        positive = radius[(radius > 0) & (radius <= rmax)]
+        if positive.size:
+            rmin = min(rmin, positive.min())
+    if not 0 < rmin < rmax:
+        raise ValueError('Insufficient nonzero radial extent')
+    edges = np.geomspace(rmin, rmax, N_BINS + 1)
+    edges[0] = np.nextafter(edges[0], 0)
+    print(f'Domain: {lo} .. {hi}; center={center}; radius={rmin:g} .. {rmax:g} [code]')
+    return center, edges
 
-    F_grav = F_star + F_self
 
-    # ===============================
-    # 圧力勾配（簡易 radial bin 微分）
-    # ===============================
-    # 一旦ビン平均した後に微分する
+def cell_quantities(grid, center):
+    data = grid.cell_data
+    xyz = grid.cell_centers().points - center
+    r = np.linalg.norm(xyz, axis=1)
+    unit = np.divide(xyz, r[:, None], out=np.zeros_like(xyz), where=r[:, None] > 0)
+    velocity = np.asarray(data['vel'])
+    vr = np.sum(velocity * unit, axis=1)
+    R = np.linalg.norm(xyz[:, :2], axis=1)
+    vphi = np.divide(-xyz[:, 1]*velocity[:, 0] + xyz[:, 0]*velocity[:, 1],
+                     R, out=np.zeros_like(r), where=R > 0)
+    # 軸上では方位方向を定義できないため、横方向運動は polar に入れる。
+    vtheta2 = np.maximum(np.sum(velocity**2, axis=1) - vr**2 - vphi**2, 0)
+    q = {'vr': vr, 'star': np.asarray(data['gr_star']), 'nfw': np.asarray(data['gr_nfw'])}
+    for key, prefix in VECTORS.items():
+        vector = np.column_stack([data[f'{prefix}_{axis}'] for axis in 'xyz'])
+        q[key] = np.sum(vector * unit, axis=1)
+    q['rotation'] = np.divide(vphi**2, r, out=np.zeros_like(r), where=r > 0)
+    q['polar'] = np.divide(vtheta2, r, out=np.zeros_like(r), where=r > 0)
+    q['sum'] = sum(q[key] for key in ('self', 'star', 'pressure', 'rotation', 'polar', 'magnetic'))
+    volume = np.asarray(grid.compute_cell_sizes(length=False, area=False, volume=True).cell_data['Volume'])
+    rho = np.asarray(data['rho'])
+    if not np.all(np.isfinite(rho) & (rho > 0) & np.isfinite(volume) & (volume > 0)):
+        raise ValueError('Invalid density or cell volume')
+    if not all(np.all(np.isfinite(value)) for value in q.values()):
+        raise ValueError('Non-finite acceleration or velocity')
+    magnetic = np.asarray(data['Bcc'])
+    if not np.all(np.isfinite(magnetic)):
+        raise ValueError('Non-finite Bcc')
+    has_magnetic = np.any(magnetic != 0) or any(np.any(data[f'amag_{axis}'] != 0) for axis in 'xyz')
+    return r, q, volume if WEIGHT == 'volume' else volume*rho, has_magnetic
 
-    valid = (
-        np.isfinite(rho)
-        & (rho > 0)
-        & (r > 0)
-        & (r <= r_max)
-        & midplane
-    )
 
-    r_valid = r[valid]
-    rho_valid = rho[valid]
+def analyze(paths, center, edges):
+    totals, denominator = {}, np.zeros(N_BINS)
+    counts = np.zeros(N_BINS, dtype=int)
+    magnetic = False
+    for path in paths:
+        r, q, weights, block_magnetic = cell_quantities(load(path), center)
+        magnetic |= block_magnetic
+        index = np.searchsorted(edges, r, side='right') - 1
+        index[r == edges[-1]] = N_BINS - 1
+        valid = (r > 0) & (index >= 0) & (index < N_BINS)
+        bins, w = index[valid], weights[valid]
+        denominator += np.bincount(bins, weights=w, minlength=N_BINS)
+        counts += np.bincount(bins, minlength=N_BINS)
+        for key, values in q.items():
+            totals.setdefault(key, np.zeros(N_BINS))
+            totals[key] += np.bincount(bins, weights=w*values[valid], minlength=N_BINS)
+    profiles = {key: np.divide(value, denominator, out=np.full(N_BINS, np.nan), where=denominator > 0)
+                for key, value in totals.items()}
+    return profiles, counts, denominator, magnetic
 
-    bin_index = np.digitize(r_valid, bin_edges) - 1
 
-    rho_shell = np.zeros(n_bins)
+def save_plot(step, edges, profiles, magnetic):
+    radius_au = np.sqrt(edges[:-1]*edges[1:]) * LENGTH_UNIT_AU
+    acceleration_cgs = {
+        key: value * ACCELERATION_UNIT_CGS
+        for key, value in profiles.items()
+        if key != 'vr'
+    }
+    radial_velocity_kms = profiles['vr'] * VELOCITY_UNIT_KMS
+    fig, (ax, av) = plt.subplots(2, 1, figsize=(10, 9), sharex=True, constrained_layout=True)
+    keys = ['self', 'star', 'nfw', 'pressure', 'rotation', 'polar']
+    if magnetic:
+        keys.append('magnetic')
+    keys.append('sum')
+    for key in keys:
+        kwargs = {'color': 'black', 'lw': 2.0} if key == 'sum' else {'lw': 1.3}
+        ax.plot(radius_au, acceleration_cgs[key], '--' if key == 'nfw' else '-', label=LABELS[key], **kwargs)
+    values = np.concatenate([np.abs(acceleration_cgs[key]) for key in keys])
+    finite = values[np.isfinite(values) & (values > 0)]
+    threshold = finite.max()*1e-4 if finite.size else 1.0
+    ax.set_yscale('symlog', linthresh=threshold)
+    ax.set_ylabel(r'Radial acceleration [cm s$^{-2}$] (+ outward)')
+    ax.legend(fontsize=9, ncol=2)
+    av.plot(radius_au, radial_velocity_kms, color='black', label='Mean radial velocity')
+    av.set_ylabel(r'Radial velocity [km s$^{-1}$] (+ outward)')
+    av.set_xlabel('Spherical radius [AU]')
+    av.legend()
+    for panel in (ax, av):
+        panel.set_xscale('log')
+        panel.axhline(0, color='0.5', lw=.7)
+        panel.grid(True, which='both', alpha=.25)
+    region = 'complete shells' if FULL_SHELLS_ONLY else 'outer shells partially sampled'
+    fig.suptitle(f'Step {step:05d} | {WEIGHT}-weighted | {region}\nNFW scalar shown separately; excluded from sum')
+    fig.savefig(OUTPUT_DIR / f'radial_acceleration_{step:05d}.png', dpi=160)
+    plt.close(fig)
 
-    for i in range(n_bins):
-        mask = bin_index == i
-        if np.any(mask):
-            rho_shell[i] = rho_valid[mask].mean()
-        else:
-            rho_shell[i] = np.nan
-            
-    # --- ln rho ---
-    lnrho = np.log(np.maximum(rho_shell, 1e-30))
 
-    # --- d ln rho / dr ---
-    dlnrho_dr = np.gradient(lnrho, bin_centers)
+def main():
+    if WEIGHT not in ('volume', 'mass') or N_BINS < 2:
+        raise ValueError('Invalid WEIGHT or N_BINS')
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    warnings.warn('Physical-unit conversion assumes Toyouchi-test76 units: '
+                  'L0=100 AU and T0=1 kyr. '
+                  'NFW stored scalar is a reference, excluded from sum. '
+                  'Initial gr_star/gr_nfw may be uninitialized zeros.')
+    for step, paths in collect_steps(DATADIR).items():
+        print(f'Step {step:05d}: {len(paths)} blocks')
+        center, edges = geometry(paths)
+        profiles, counts, weights, magnetic = analyze(paths, center, edges)
+        save_plot(step, edges, profiles, magnetic)
+        acceleration_keys = [key for key in profiles if key != 'vr']
+        table = np.column_stack([
+            edges[:-1] * LENGTH_UNIT_AU,
+            edges[1:] * LENGTH_UNIT_AU,
+            counts,
+            weights,
+            profiles['vr'] * VELOCITY_UNIT_KMS,
+        ] + [profiles[key] * ACCELERATION_UNIT_CGS for key in acceleration_keys])
+        np.savetxt(OUTPUT_DIR / f'radial_acceleration_{step:05d}.csv', table, delimiter=',',
+                   header=','.join([
+                       'r_left_au', 'r_right_au', 'cell_count', 'weight_sum_code',
+                       'vr_km_s',
+                   ] + [f'{key}_cm_s-2' for key in acceleration_keys]), comments='')
+        print(f'Saved PNG/CSV; empty shells={np.count_nonzero(counts == 0)}; magnetic={magnetic}')
 
-    # --- 圧力勾配力 ---
-    F_pres_shell = - (cs**2)*dlnrho_dr
 
-    # ===============================
-    # 各力のビン平均
-    # ===============================
-    Fgrav_prof = np.zeros(n_bins)
-    Fcent_prof = np.zeros(n_bins)
-
-    for i in range(n_bins):
-        mask = (bin_index == i)
-        if np.any(mask):
-            Fgrav_prof[i] = F_grav[valid][mask].mean()
-            Fcent_prof[i] = F_cent[valid][mask].mean()
-        else:
-            Fgrav_prof[i] = np.nan
-            Fcent_prof[i] = np.nan
-
-    # 圧力はshell定義
-    Fpres_prof = F_pres_shell
-
-    # ===============================
-    # 合力(シミュレーション)
-    # ===============================
-    F_tot = Fgrav_prof + Fcent_prof + Fpres_prof
-    
-    # ===============================
-    # 各力(理論)
-    # ===============================
-    r_th = bin_centers
-    # --- Wise et al. (2019) 密度と包有質量（Toyouchi.cpp と同一） ---
-    M_enc, rho_th = wise19_profiles_code(r_th)
-
-    # --- 回転 ---
-    vphi_th = 0.5 * np.sqrt(G * M_enc / np.maximum(r_th, 1e-12))
-
-    # --- 各力 ---
-    Fself_th = -G * M_enc / np.maximum(r_th, 1e-12)**2   # ガス自己重力
-    Fgrav_th = -G * Mstar / np.maximum(r_th, 1e-12)**2 + Fself_th   # 中心星＋ガス自己重力
-    Fcent_th = vphi_th**2 / np.maximum(r_th, 1e-12)
-
-    # 圧力（lnρ微分）
-    lnrho_th = np.log(rho_th)
-    dlnrho_dr_th = np.gradient(lnrho_th, r_th)
-    Fpres_th = - (cs**2) * dlnrho_dr_th
-
-    # --- 合力 ---
-    Ftot_th = Fgrav_th + Fcent_th + Fpres_th
-
-    # ===============================
-    # プロット①：各力
-    # ===============================
-    plt.figure(figsize=(7,5))
-
-    plt.plot(bin_centers, Fgrav_prof, label="Gravity", lw=1.2)
-    plt.plot(bin_centers, Fcent_prof, label="Centrifugal", lw=1.2)
-    plt.plot(bin_centers, Fpres_prof, label="Pressure", lw=1.2)
-
-    plt.axhline(0, color="gray", lw=0.8)
-
-    plt.xscale("log")
-    plt.yscale("symlog", linthresh=1e-6)
-
-    plt.xlabel("r (×100 AU)")
-    plt.ylabel("Force (radial)")
-
-    plt.title(f"Force components (step {step})")
-
-    plt.legend()
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-
-    png1 = os.path.join(output_dir1,
-                        f"force_components_{step}.png")
-
-    plt.savefig(png1, dpi=150, bbox_inches="tight")
-    plt.close()
-
-    # ===============================
-    # プロット②：合力のみ
-    # ===============================
-    plt.figure(figsize=(7,5))
-
-    # --- シミュ ---
-    plt.plot(bin_centers, F_tot,
-             "k", lw=1.3, label="Simulation")
-
-    # --- 理論 ---
-    plt.plot(r_th, Ftot_th,
-             "r--", lw=1.0, label="Theory")
-
-    plt.axhline(0, color="gray", lw=0.8)
-
-    plt.xscale("log")
-    plt.yscale("symlog", linthresh=1e-6)
-
-    plt.xlabel("r (×100 AU)")
-    plt.ylabel("Force (radial)")
-
-    plt.title(f"Total force (step {step})")
-
-    plt.legend()
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-
-    png2 = os.path.join(output_dir2,
-                        f"force_total_{step}.png")
-
-    plt.savefig(png2, dpi=150, bbox_inches="tight")
-    plt.close()
-
-print("Done.")
+if __name__ == '__main__':
+    main()
