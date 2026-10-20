@@ -29,9 +29,6 @@ G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
 Mstar = 1.0
 cs = 3.9954968108039886  # 1.8940534618758 km/s for L0=100 AU, T0=1 kyr
 
-racc = 0.44
-r_cut = max(racc, 1e-12)
-
 z_cut = 2.0  # midplane
 
 # 出力

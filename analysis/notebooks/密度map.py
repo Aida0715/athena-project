@@ -6,8 +6,6 @@
 # x-z 平面密度マップ（AMR グリッドなし）
 #   ・計算領域を VTK の bounds から自動取得
 #   ・全域、1/10 を別ディレクトリへ保存
-#   ・シンク半径は設定欄で手動指定
-#   ・シンク内部を白抜き
 #   ・時間を kyr で表示（TIME_DECIMALS 桁に丸める）
 #
 # このファイル全体を Jupyter Notebook の1セルに貼り付けて実行できます。
@@ -77,9 +75,6 @@ FIGSIZE = (8.6, 7.2)
 TIME_DECIMALS = 0       # 0: 整数 kyr。例: 10 kyr
 SHOW_IMAGES = False     # 全画像を Notebook に表示するなら True
 GLOBAL_SCALE_SAMPLE_COUNT = 10
-
-# シンク半径を手動指定 [AU]
-SINK_RADIUS_AU = 1000.0
 
 
 # ============================================================
@@ -251,14 +246,9 @@ def scientific_axis_scale(bounds):
 
 def plot_and_save(
     X, Z, density_map, bounds, norm, cmap_name, interpolation,
-    step, time_kyr, sink_radius_au, source_cells, label, output_path,
+    step, time_kyr, source_cells, label, output_path,
 ):
-    # シンクは補間後に幾何学的にマスクするため、常に同じ真円になる。
-    if sink_radius_au > 0.0:
-        sink_mask = np.hypot(X, Z) <= sink_radius_au
-        density_plot = np.ma.array(density_map, mask=sink_mask)
-    else:
-        density_plot = np.ma.masked_invalid(density_map)
+    density_plot = np.ma.masked_invalid(density_map)
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -342,10 +332,6 @@ plot_bounds = {
     "zoom_1over10": fractional_bounds(full_bounds, 1.0 / 10.0),
 }
 
-sink_radius_au = float(SINK_RADIUS_AU)
-if not np.isfinite(sink_radius_au) or sink_radius_au < 0.0:
-    raise ValueError("SINK_RADIUS_AU must be a finite value >= 0 [AU].")
-
 print(f"[INFO] Input          : {vtk_dir}")
 print(f"[INFO] Steps          : {len(steps)}")
 print(f"[INFO] Density field  : {density_name}")
@@ -356,7 +342,6 @@ for key, directory in output_dirs.items():
 
 # ============================================================
 # 全体図用の共通カラースケールをサンプル時刻から決定
-# シンク内部は統計から除外する。
 # ============================================================
 sample_indices = np.unique(
     np.linspace(0, len(steps) - 1, min(GLOBAL_SCALE_SAMPLE_COUNT, len(steps))).astype(int)
@@ -365,10 +350,8 @@ sample_density = []
 for sample_index in sample_indices:
     step = steps[sample_index]
     points, density = load_step_slice(files_by_step[step], density_name)
-    outside_sink = np.hypot(points[:, 0], points[:, 2]) > sink_radius_au
-    if np.any(outside_sink):
-        sample_density.append(density[outside_sink])
-    del points, density, outside_sink
+    sample_density.append(density)
+    del points, density
     gc.collect()
 
 full_vmin, full_vmax = log_limits(
@@ -389,9 +372,6 @@ for index, step in enumerate(steps, start=1):
     points, density = load_step_slice(files, density_name)
     time_code = read_vtk_time_code(files[0])
     time_kyr = time_code * TIME_UNIT_KYR
-
-    radius_xz = np.hypot(points[:, 0], points[:, 2])
-    outside_sink = radius_xz > sink_radius_au
 
     print(
         f"[{index:4d}/{len(steps):4d}] step={step:05d}, "
@@ -414,7 +394,6 @@ for index, step in enumerate(steps, start=1):
             in_view = (
                 (points[:, 0] >= xmin) & (points[:, 0] <= xmax)
                 & (points[:, 2] >= zmin) & (points[:, 2] <= zmax)
-                & outside_sink
             )
             zoom_vmin, zoom_vmax = log_limits(
                 density[in_view],
@@ -438,7 +417,6 @@ for index, step in enumerate(steps, start=1):
             interpolation=interpolation,
             step=step,
             time_kyr=time_kyr,
-            sink_radius_au=sink_radius_au,
             source_cells=source_cells,
             label=label,
             output_path=output_path,
@@ -447,7 +425,7 @@ for index, step in enumerate(steps, start=1):
         del X, Z, density_map, norm
         gc.collect()
 
-    del points, density, radius_xz, outside_sink
+    del points, density
     gc.collect()
 
 print("[DONE] All density maps were saved.")
@@ -457,8 +435,6 @@ print("[DONE] All density maps were saved.")
 # x-y 平面密度マップ（AMR グリッドなし）
 #   ・計算領域を VTK の bounds から自動取得
 #   ・全域、1/10 を別ディレクトリへ保存
-#   ・シンク半径は設定欄で手動指定
-#   ・シンク内部を白抜き
 #   ・時間を kyr で表示（TIME_DECIMALS 桁に丸める）
 #
 # このファイル全体を Jupyter Notebook の1セルに貼り付けて実行できます。
@@ -528,9 +504,6 @@ FIGSIZE = (8.6, 7.2)
 TIME_DECIMALS = 0       # 0: 整数 kyr。例: 10 kyr
 SHOW_IMAGES = False     # 全画像を Notebook に表示するなら True
 GLOBAL_SCALE_SAMPLE_COUNT = 10
-
-# シンク半径を手動指定 [AU]
-SINK_RADIUS_AU = 1000.0
 
 
 # ============================================================
@@ -702,14 +675,9 @@ def scientific_axis_scale(bounds):
 
 def plot_and_save(
     X, Y, density_map, bounds, norm, cmap_name, interpolation,
-    step, time_kyr, sink_radius_au, source_cells, label, output_path,
+    step, time_kyr, source_cells, label, output_path,
 ):
-    # シンクは補間後に幾何学的にマスクするため、常に同じ真円になる。
-    if sink_radius_au > 0.0:
-        sink_mask = np.hypot(X, Y) <= sink_radius_au
-        density_plot = np.ma.array(density_map, mask=sink_mask)
-    else:
-        density_plot = np.ma.masked_invalid(density_map)
+    density_plot = np.ma.masked_invalid(density_map)
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -793,10 +761,6 @@ plot_bounds = {
     "zoom_1over10": fractional_bounds(full_bounds, 1.0 / 10.0),
 }
 
-sink_radius_au = float(SINK_RADIUS_AU)
-if not np.isfinite(sink_radius_au) or sink_radius_au < 0.0:
-    raise ValueError("SINK_RADIUS_AU must be a finite value >= 0 [AU].")
-
 print(f"[INFO] Input          : {vtk_dir}")
 print(f"[INFO] Steps          : {len(steps)}")
 print(f"[INFO] Density field  : {density_name}")
@@ -807,7 +771,6 @@ for key, directory in output_dirs.items():
 
 # ============================================================
 # 全体図用の共通カラースケールをサンプル時刻から決定
-# シンク内部は統計から除外する。
 # ============================================================
 sample_indices = np.unique(
     np.linspace(0, len(steps) - 1, min(GLOBAL_SCALE_SAMPLE_COUNT, len(steps))).astype(int)
@@ -816,10 +779,8 @@ sample_density = []
 for sample_index in sample_indices:
     step = steps[sample_index]
     points, density = load_step_slice(files_by_step[step], density_name)
-    outside_sink = np.hypot(points[:, 0], points[:, 1]) > sink_radius_au
-    if np.any(outside_sink):
-        sample_density.append(density[outside_sink])
-    del points, density, outside_sink
+    sample_density.append(density)
+    del points, density
     gc.collect()
 
 full_vmin, full_vmax = log_limits(
@@ -840,9 +801,6 @@ for index, step in enumerate(steps, start=1):
     points, density = load_step_slice(files, density_name)
     time_code = read_vtk_time_code(files[0])
     time_kyr = time_code * TIME_UNIT_KYR
-
-    radius_xy = np.hypot(points[:, 0], points[:, 1])
-    outside_sink = radius_xy > sink_radius_au
 
     print(
         f"[{index:4d}/{len(steps):4d}] step={step:05d}, "
@@ -865,7 +823,6 @@ for index, step in enumerate(steps, start=1):
             in_view = (
                 (points[:, 0] >= xmin) & (points[:, 0] <= xmax)
                 & (points[:, 1] >= ymin) & (points[:, 1] <= ymax)
-                & outside_sink
             )
             zoom_vmin, zoom_vmax = log_limits(
                 density[in_view],
@@ -889,7 +846,6 @@ for index, step in enumerate(steps, start=1):
             interpolation=interpolation,
             step=step,
             time_kyr=time_kyr,
-            sink_radius_au=sink_radius_au,
             source_cells=source_cells,
             label=label,
             output_path=output_path,
@@ -898,7 +854,7 @@ for index, step in enumerate(steps, start=1):
         del X, Y, density_map, norm
         gc.collect()
 
-    del points, density, radius_xy, outside_sink
+    del points, density
     gc.collect()
 
 print("[DONE] All density maps were saved.")
@@ -909,9 +865,7 @@ print("[DONE] All density maps were saved.")
 # x-y 平面密度マップ（実セルグリッド線あり）
 #   ・計算領域を VTK の bounds から自動取得
 #   ・全域、1/10 を別ディレクトリへ保存
-#   ・シンク半径は設定欄で手動指定
 #   ・実際のセル境界を取得して黒線で重ねる
-#   ・シンク内部を白抜き
 #   ・時間を kyr で表示（TIME_DECIMALS 桁に丸める）
 #
 # このファイル全体を Jupyter Notebook の1セルに貼り付けて実行できます。
@@ -992,9 +946,6 @@ ZOOM_GRID_LINEWIDTH = 0.35
 ZOOM_GRID_ALPHA = 0.45
 FULL_GRID_COLOR = "white"
 ZOOM_GRID_COLOR = "black"
-
-# シンク半径を手動指定 [AU]
-SINK_RADIUS_AU = 1000.0
 
 
 # ============================================================
@@ -1215,15 +1166,10 @@ def scientific_axis_scale(bounds):
 
 def plot_and_save(
     X, Y, density_map, bounds, norm, cmap_name, interpolation,
-    step, time_kyr, sink_radius_au, source_cells, grid_segments,
+    step, time_kyr, source_cells, grid_segments,
     label, output_path,
 ):
-    # シンクは補間後に幾何学的にマスクするため、常に同じ真円になる。
-    if sink_radius_au > 0.0:
-        sink_mask = np.hypot(X, Y) <= sink_radius_au
-        density_plot = np.ma.array(density_map, mask=sink_mask)
-    else:
-        density_plot = np.ma.masked_invalid(density_map)
+    density_plot = np.ma.masked_invalid(density_map)
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -1274,13 +1220,6 @@ def plot_and_save(
             rasterized=True,
         )
         ax.add_collection(collection)
-
-    # シンク内部では密度だけでなくグリッド線も白抜きにする。
-    if sink_radius_au > 0.0:
-        ax.add_patch(Circle(
-            (0.0, 0.0), sink_radius_au,
-            facecolor="white", edgecolor="none", zorder=4,
-        ))
 
     ax.set_xlim(bounds[0], bounds[1])
     ax.set_ylim(bounds[2], bounds[3])
@@ -1344,10 +1283,6 @@ plot_bounds = {
     "zoom_1over10": fractional_bounds(full_bounds, 1.0 / 10.0),
 }
 
-sink_radius_au = float(SINK_RADIUS_AU)
-if not np.isfinite(sink_radius_au) or sink_radius_au < 0.0:
-    raise ValueError("SINK_RADIUS_AU must be a finite value >= 0 [AU].")
-
 print(f"[INFO] Input          : {vtk_dir}")
 print(f"[INFO] Steps          : {len(steps)}")
 print(f"[INFO] Density field  : {density_name}")
@@ -1358,7 +1293,6 @@ for key, directory in output_dirs.items():
 
 # ============================================================
 # 全体図用の共通カラースケールをサンプル時刻から決定
-# シンク内部は統計から除外する。
 # ============================================================
 sample_indices = np.unique(
     np.linspace(0, len(steps) - 1, min(GLOBAL_SCALE_SAMPLE_COUNT, len(steps))).astype(int)
@@ -1369,10 +1303,8 @@ for sample_index in sample_indices:
     points, density, _ = load_step_slice(
         files_by_step[step], density_name, collect_grid=False
     )
-    outside_sink = np.hypot(points[:, 0], points[:, 1]) > sink_radius_au
-    if np.any(outside_sink):
-        sample_density.append(density[outside_sink])
-    del points, density, outside_sink
+    sample_density.append(density)
+    del points, density
     gc.collect()
 
 full_vmin, full_vmax = log_limits(
@@ -1396,9 +1328,6 @@ for index, step in enumerate(steps, start=1):
     time_code = read_vtk_time_code(files[0])
     time_kyr = time_code * TIME_UNIT_KYR
 
-    radius_xy = np.hypot(points[:, 0], points[:, 1])
-    outside_sink = radius_xy > sink_radius_au
-
     print(
         f"[{index:4d}/{len(steps):4d}] step={step:05d}, "
         f"t={time_kyr:.{TIME_DECIMALS}f} kyr, cells={len(density)}"
@@ -1420,7 +1349,6 @@ for index, step in enumerate(steps, start=1):
             in_view = (
                 (points[:, 0] >= xmin) & (points[:, 0] <= xmax)
                 & (points[:, 1] >= ymin) & (points[:, 1] <= ymax)
-                & outside_sink
             )
             zoom_vmin, zoom_vmax = log_limits(
                 density[in_view],
@@ -1444,7 +1372,6 @@ for index, step in enumerate(steps, start=1):
             interpolation=interpolation,
             step=step,
             time_kyr=time_kyr,
-            sink_radius_au=sink_radius_au,
             source_cells=source_cells,
             grid_segments=grid_segments,
             label=label,
@@ -1454,9 +1381,8 @@ for index, step in enumerate(steps, start=1):
         del X, Y, density_map, norm
         gc.collect()
 
-    del points, density, grid_segments, radius_xy, outside_sink
+    del points, density, grid_segments
     gc.collect()
 
 print("[DONE] All density maps were saved.")
-
 

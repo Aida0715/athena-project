@@ -24,9 +24,6 @@ T_UNIT_CGS = 3.15576e10
 G_CGS = 6.67430e-8
 G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
 
-racc = 0.44
-r_cut = max(racc, 1e-12)
-
 z_cut = 2.0
 
 # 出力
@@ -64,10 +61,7 @@ def theoretical_vphi(r):
 
     M_gas = 4.0 * np.pi * 0.11 * r**1.25 / 1.25
 
-    vphi = 0.5 * np.sqrt(G * M_gas / np.maximum(r, r_cut))
-
-    mask = r < r_cut
-    vphi[mask] *= (r[mask] / r_cut)**2
+    vphi = 0.5 * np.sqrt(G * M_gas / np.maximum(r, 1e-12))
 
     return vphi
 

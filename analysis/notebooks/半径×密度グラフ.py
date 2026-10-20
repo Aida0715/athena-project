@@ -29,9 +29,6 @@ output_dir = os.path.expanduser(
 # 中心座標 [code length]
 center_code = np.array([0.0, 0.0, 0.0], dtype=float)
 
-# シンク半径 [AU]
-sink_radius_au = 1000.0
-
 # 対数球殻ビン数
 n_bins = 100
 
@@ -62,7 +59,6 @@ print("=== New Toyouchi code units ===")
 print(f"1 code length  = {LENGTH_UNIT_AU:.6f} AU")
 print(f"1 code time    = {TIME_UNIT_KYR:.6f} kyr")
 print(f"1 code density = {RHO_UNIT_CGS:.6e} g cm^-3")
-print(f"Sink radius    = {sink_radius_au:g} AU")
 print(f"Output         = {os.path.abspath(output_dir)}")
 
 
@@ -284,13 +280,6 @@ for number, step in enumerate(timesteps, start=1):
         linewidth=1.6,
     )
 
-    ax.axvline(
-        sink_radius_au,
-        color="red",
-        linewidth=1.5,
-        label=rf"Sink radius = {sink_radius_au:g} AU",
-    )
-
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlim(profile["radius_min_au"], profile["radius_max_au"])
@@ -308,8 +297,6 @@ for number, step in enumerate(timesteps, start=1):
         linewidth=0.6,
         alpha=0.35,
     )
-    ax.legend(loc="best", frameon=True)
-
     fig.tight_layout()
     fig.savefig(
         output_file,

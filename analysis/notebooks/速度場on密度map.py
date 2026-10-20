@@ -110,9 +110,6 @@ QUIVER_N = 31
 # 全時刻共通の密度表示範囲を決めるpercentile
 DENSITY_PERCENTILES = (1.0, 99.5)
 
-# 密度カラースケールを決める際に除外するシンク半径
-SINK_RADIUS_AU = 1000.0
-
 # 代表速度に対してこれより遅い場所では矢印を非表示
 MIN_SPEED_FRACTION = 0.01
 
@@ -892,11 +889,6 @@ for index, step_info in enumerate(
             step_info
         )
 
-        radius_au = np.hypot(
-            snapshot["x"],
-            snapshot["z"],
-        )
-
         mask = (
             np.isfinite(
                 snapshot["rho"]
@@ -904,10 +896,6 @@ for index, step_info in enumerate(
             & (
                 snapshot["rho"]
                 > 0.0
-            )
-            & (
-                radius_au
-                >= SINK_RADIUS_AU
             )
         )
 
@@ -933,7 +921,6 @@ for index, step_info in enumerate(
                 values.copy()
             )
 
-        del radius_au
         del mask
         del values
         del snapshot
@@ -948,8 +935,7 @@ for index, step_info in enumerate(
 
 if not density_samples:
     raise RuntimeError(
-        "No positive density values were found "
-        "outside the sink."
+        "No positive density values were found."
     )
 
 global_density = np.concatenate(
@@ -1526,9 +1512,6 @@ DENSITY_PERCENTILES = (
     5.0,
     99.0,
 )
-
-# 密度表示範囲の統計から除外するシンク半径
-SINK_RADIUS_AU = 1000.0
 
 # 代表速度に対してこれより遅い場所では矢印を表示しない
 MIN_SPEED_FRACTION = 0.01
@@ -2320,11 +2303,6 @@ for index, step_info in enumerate(
             step_info
         )
 
-        radius_au = np.hypot(
-            snapshot["x"],
-            snapshot["y"],
-        )
-
         density_mask = (
             np.isfinite(
                 snapshot["rho"]
@@ -2332,10 +2310,6 @@ for index, step_info in enumerate(
             & (
                 snapshot["rho"]
                 > 0.0
-            )
-            & (
-                radius_au
-                >= SINK_RADIUS_AU
             )
         )
 
@@ -2365,7 +2339,6 @@ for index, step_info in enumerate(
 
         del values
         del density_mask
-        del radius_au
         del snapshot
 
         gc.collect()
@@ -2379,8 +2352,7 @@ for index, step_info in enumerate(
 
 if not density_samples:
     raise RuntimeError(
-        "No positive density values were found "
-        "outside the sink."
+        "No positive density values were found."
     )
 
 global_density = np.concatenate(

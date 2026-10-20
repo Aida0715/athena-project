@@ -6,9 +6,9 @@
 python3 analysis/notebooks/ジーンズ長解析.py /work/beta/aida/results/Toyouchi-test72
 
 依存: numpy, matplotlib, pyvista。スクリプト冒頭の設定でも実行可能。
-シンク判定・任意の解析箱への所属はセル中心で判定する。
+任意の解析箱への所属はセル中心で判定する。
 VTKはghost_zones=false、重複のない全leaf MeshBlock一式を使う。
-音速・重力定数・シンク半径・単位系は冒頭で手動設定する。
+音速・重力定数・単位系は冒頭で手動設定する。
 領域はVTKから推定するため、全時刻で同じ外側領域が欠けている場合は検出できない。
 """
 
@@ -23,7 +23,6 @@ from pathlib import Path
 # IDEから実行するときの設定。対象runの値に変更する。
 DATADIR = "~/athena-project/results/〇〇"
 ISO_SOUND_SPEED_CODE = 3.9954968108039886
-SINK_RADIUS_AU = 1000.0  # 対象runに合わせる。シンクなしの場合は0。
 OUTPUT_DIR = "./jeans_diagnostics"
 THRESHOLDS = (4, 8, 16, 32)
 # 全領域を診断。中心のみなら例: ((-5000, 5000),) * 3 [au]
@@ -125,10 +124,8 @@ def draw_slice(ax, xyz, delta, nj, selected, args, norm=None, cmap="viridis"):
 def analyze(args):
     cs = float(ISO_SOUND_SPEED_CODE)
     grav = float(GRAV_CONST_CODE)
-    sink = float(SINK_RADIUS_AU)
-    if not (np.isfinite(cs) and np.isfinite(grav) and cs > 0 and grav > 0
-            and np.isfinite(sink) and sink >= 0):
-        raise ValueError("音速・重力定数・シンク半径を確認してください")
+    if not (np.isfinite(cs) and np.isfinite(grav) and cs > 0 and grav > 0):
+        raise ValueError("音速・重力定数を確認してください")
     region = None if ANALYSIS_BOUNDS_AU is None else np.asarray(ANALYSIS_BOUNDS_AU) / L_AU
     if region is not None and (region.shape != (3, 2) or
                               not np.all(np.isfinite(region)) or
@@ -149,11 +146,11 @@ def analyze(args):
     out = Path(args.output).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     (out / "settings.json").write_text(json.dumps(dict(
-        arguments=vars(args), sound_speed_code=cs, G_code=grav, sink_radius_au=sink,
+        arguments=vars(args), sound_speed_code=cs, G_code=grav,
         thresholds=THRESHOLDS, analysis_bounds_au=ANALYSIS_BOUNDS_AU,
         inferred_domain_code=domain.tolist(),
         L_unit_cgs=L_UNIT_CGS, M_unit_cgs=M_UNIT_CGS, T_unit_cgs=T_UNIT_CGS,
-        selection="cell centers; exclude r < sink radius; all leaf blocks; no ghosts"
+        selection="cell centers; all leaf blocks; no ghosts"
     ), indent=2, ensure_ascii=False))
     rows = []
     for index, (step, files) in enumerate(sorted(groups.items())):
@@ -175,7 +172,7 @@ def analyze(args):
             volume += dv.sum()
             if np.any(xyz-delta/2 < domain[:, 0]-1e-5) or np.any(xyz+delta/2 > domain[:, 1]+1e-5):
                 raise ValueError(f"最初のVTKで推定した領域外のセルがあります: {path}")
-            selected = np.linalg.norm(xyz, axis=1) >= sink / L_AU
+            selected = np.ones(len(xyz), dtype=bool)
             if region is not None:
                 selected &= np.all((xyz >= region[:, 0]) & (xyz < region[:, 1]), axis=1)
             nj = np.sqrt(np.pi * cs**2 / (grav * rho)) / delta.max(axis=1)
@@ -196,7 +193,7 @@ def analyze(args):
         if not np.isclose(volume, expected_volume, rtol=1e-5):
             raise ValueError(f"全セル体積がVTKの推定領域と不一致（欠損・重複・ghostを確認）: step={step}, {volume}/{expected_volume}")
         if mass <= 0 or worst is None:
-            raise ValueError(f"解析領域にシンク外のガスがありません: step={step}")
+            raise ValueError(f"解析領域にガスがありません: step={step}")
         row = dict(step=step, time_code=time, time_kyr=time*T_KYR, min_NJ=minimum,
                    mass_code=mass, selected_cells=count, meshblocks=len(files),
                    min_x_au=worst[0], min_y_au=worst[1], min_z_au=worst[2],
@@ -213,11 +210,6 @@ def analyze(args):
                          "Native cells; black: MeshBlock edges (including SMR boundaries)")
             ax.set_aspect("equal")
             ax.set_facecolor("0.85")
-            radius2 = sink**2 - args.slice_au**2
-            if radius2 > 0:
-                ax.add_patch(Circle((0, 0), np.sqrt(radius2), fill=False,
-                                    color="red", linestyle="--", label="Sink radius"))
-                ax.legend(loc="upper right")
             if not slice_count:
                 ax.text(.5, .5, "No selected cells on this plane", transform=ax.transAxes, ha="center")
             colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=LogNorm(1, 64), cmap="viridis"),
@@ -234,7 +226,7 @@ def analyze(args):
         writer.writerows(rows)
     times = [row["time_kyr"] for row in rows]
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(times, [row["min_NJ"] for row in rows], "o-", label="Minimum outside sink")
+    ax.plot(times, [row["min_NJ"] for row in rows], "o-", label="Minimum")
     for n in THRESHOLDS:
         ax.axhline(n, linestyle="--", alpha=.6, label=f"NJ={n}")
     ax.set(xlabel="Time [kyr]", ylabel="Minimum Jeans cells", yscale="log")
@@ -274,7 +266,7 @@ def parse_arguments(argv=None):
 
 def main(argv=None):
     args = parse_arguments(argv)
-    global np, pv, plt, PolyCollection, LogNorm, Rectangle, Circle
+    global np, pv, plt, PolyCollection, LogNorm, Rectangle
     import numpy as np
     import pyvista as pv
     import matplotlib
@@ -282,7 +274,7 @@ def main(argv=None):
     import matplotlib.pyplot as plt
     from matplotlib.collections import PolyCollection
     from matplotlib.colors import LogNorm
-    from matplotlib.patches import Rectangle, Circle
+    from matplotlib.patches import Rectangle
     analyze(args)
 
 
@@ -291,7 +283,7 @@ if __name__ == "__main__":
 
 
 # %% cell2: 現在の密度から必要な追加細分化レベルを見積もる
-# cell1を先に実行する。DATADIR・音速・G・シンク半径・単位系はcell1を共有。
+# cell1を先に実行する。DATADIR・音速・G・単位系はcell1を共有。
 # 追加段数は各セルの「現在のレベルからの増分」であり、絶対SMRレベルではない。
 # 再計算時の密度変化、MeshBlock単位の細分化、隣接レベル制約は含まない。
 TARGET_JEANS_CELLS = 4
@@ -343,9 +335,8 @@ def estimate_refinement(argv=None):
     if args.slice_every < 1 or args.half_width_au <= 0 or REFINEMENT_COLOR_MAX < 1:
         raise ValueError("cell2の描画設定は正値が必要です")
     if not (np.isfinite(ISO_SOUND_SPEED_CODE) and ISO_SOUND_SPEED_CODE > 0
-            and np.isfinite(GRAV_CONST_CODE) and GRAV_CONST_CODE > 0
-            and np.isfinite(SINK_RADIUS_AU) and SINK_RADIUS_AU >= 0):
-        raise ValueError("音速・重力定数・シンク半径を確認してください")
+            and np.isfinite(GRAV_CONST_CODE) and GRAV_CONST_CODE > 0):
+        raise ValueError("音速・重力定数を確認してください")
     region = np.asarray(REFINEMENT_BOUNDS_AU, dtype=float) / L_AU
     if region.shape != (3, 2) or not np.all(np.isfinite(region)) or np.any(region[:, 1] <= region[:, 0]):
         raise ValueError("REFINEMENT_BOUNDS_AUを確認してください")
@@ -355,7 +346,7 @@ def estimate_refinement(argv=None):
     (out / "settings.json").write_text(json.dumps(dict(
         arguments=vars(args), target_jeans_cells=target,
         bounds_au=REFINEMENT_BOUNDS_AU, sound_speed_code=ISO_SOUND_SPEED_CODE,
-        G_code=GRAV_CONST_CODE, sink_radius_au=SINK_RADIUS_AU,
+        G_code=GRAV_CONST_CODE,
         L_unit_cgs=L_UNIT_CGS, T_unit_cgs=T_UNIT_CGS,
         assumption="fixed density; additional levels relative to each native cell"
     ), indent=2))
@@ -377,8 +368,7 @@ def estimate_refinement(argv=None):
                 raise ValueError(f"時刻不一致: {path}")
             grid = pv.read(path)
             xyz, delta, rho = block_arrays(grid)
-            selected = (np.linalg.norm(xyz, axis=1) >= SINK_RADIUS_AU / L_AU)
-            selected &= np.all((xyz >= region[:, 0]) & (xyz < region[:, 1]), axis=1)
+            selected = np.all((xyz >= region[:, 0]) & (xyz < region[:, 1]), axis=1)
             jeans = np.sqrt(np.pi * ISO_SOUND_SPEED_CODE**2 /
                             (GRAV_CONST_CODE * rho.astype(float)))
             nj = jeans / delta.max(axis=1)
@@ -401,7 +391,7 @@ def estimate_refinement(argv=None):
             del grid
         total = sum(mass_by_level.values())
         if total <= 0:
-            raise ValueError(f"対象領域にシンク外のガスがありません: step={step}")
+            raise ValueError(f"対象領域にガスがありません: step={step}")
         history.append(dict(step=step, time_kyr=time*T_KYR,
                             max_extra_levels=max(mass_by_level),
                             min_allowed_dx_au=min_allowed_dx, mass_code=total,
@@ -420,9 +410,6 @@ def estimate_refinement(argv=None):
                          f"{args.normal}={args.slice_au:g} au; black: MeshBlock edges")
             ax.set_aspect("equal")
             ax.set_facecolor("0.85")
-            radius2 = SINK_RADIUS_AU**2 - args.slice_au**2
-            if radius2 > 0:
-                ax.add_patch(Circle((0, 0), np.sqrt(radius2), fill=False, color="red", linestyle="--"))
             if not slice_count:
                 ax.text(.5, .5, "No selected cells on this plane", transform=ax.transAxes, ha="center")
             cb = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax,

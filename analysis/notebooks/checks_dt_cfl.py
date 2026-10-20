@@ -39,7 +39,6 @@ L_UNIT_CM, T_UNIT_S = 1.495978707e15, 3.15576e10
 AU_CM = 1.495978707e13
 L_AU = L_UNIT_CM/AU_CM
 T_YR = T_UNIT_S/(365.25*86400)
-SINK_RADIUS_AU = 1000.0
 # 2つ目のログ推移を重ねたい場合：例 Path('/work/beta/aida/results/Toyouchi-test54/run.log')
 COMPARISON_LOG = None
 
@@ -52,7 +51,7 @@ OUT.mkdir(exist_ok=True)
     'data_dir': str(DATA_DIR), 'logs': None if LOG_FILES is None else list(map(str, LOG_FILES)),
     'vtk_glob': VTK_GLOB, 'expected_blocks': EXPECTED_BLOCKS, 'cfl': CFL, 'cs': CS,
     'root_dx': ROOT_DX.tolist(), 'length_unit_cm': L_UNIT_CM, 'time_unit_s': T_UNIT_S,
-    'sink_radius_au': SINK_RADIUS_AU, 'small_dt': SMALL_DT,
+    'small_dt': SMALL_DT,
     'snapshot_stride': SNAPSHOT_STRIDE, 'top_k': TOP_K,
 }, indent=2), encoding='utf-8')
 print('保存先:', OUT)
@@ -251,7 +250,6 @@ def block_candidates(path):
         row = dict(time=time, cycle=cycle, block=bid, i=int(i[q]), j=int(j[q]), k=int(k[q]),
                    dt_cfl=dt[q], direction='xyz'[direction], level=int(round(levels[0])),
                    rho=rho[q], speed=np.linalg.norm(vel[q]), radius_au=radius,
-                   inside_sink=bool(radius < SINK_RADIUS_AU),
                    block_edge_layers=int(min(i[q], nx-1-i[q], j[q], ny-1-j[q], k[q], nz-1-k[q])),
                    file=str(path))
         for a, label in enumerate('xyz'):
@@ -330,7 +328,7 @@ display(snapshots.nsmallest(10, 'dt_cfl')[['cycle','time','dt_cfl','block','i','
 # ログとVTKのcycleが一意に完全一致したものだけdtを比較します。
 # 一致しても、増加制限や保存タイミング・精度などによって一致しない場合があります。
 # `small_dt_snapshot_coverage.csv` の距離は「そのイベントの前後に保存状態があるか」の確認用で、場所の同定ではありません。
-# 位置図は各保存時刻の最小CFLセルを表します。図の円/横線はシンク半径です。
+# 位置図は各保存時刻の最小CFLセルを表します。
 
 # %% cell 9
 unique_log = log[~log.duplicated('cycle', keep=False)][['cycle','time','dt']].rename(
@@ -362,7 +360,6 @@ savefig(fig, 'dt_log_vs_snapshot.png')
 fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 t = snapshots.time*T_YR/1000
 axes[0,0].plot(t, snapshots.radius_au, '.-')
-axes[0,0].axhline(SINK_RADIUS_AU, color='k', ls='--')
 axes[0,0].set_ylabel('limiting radius [au]')
 axes[0,1].step(t, snapshots.level, where='mid'); axes[0,1].set_ylabel('limiting cell level')
 axes[1,0].semilogy(t, snapshots.rho, '.-', label='limiting cell')
@@ -379,7 +376,6 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 color = np.log10(snapshots.dt_cfl)
 for ax, horizontal, vertical in [(axes[0],'x','y'), (axes[1],'x','z')]:
     sc = ax.scatter(snapshots[horizontal+'_au'], snapshots[vertical+'_au'], c=color, s=20, cmap='viridis')
-    ax.add_patch(plt.Circle((0,0), SINK_RADIUS_AU, fill=False, color='gray', ls='--'))
     ax.set(xlabel=horizontal+' [au]', ylabel=vertical+' [au]', aspect='equal')
     ax.grid(alpha=.25)
     fig.colorbar(sc, ax=ax, label='log10(dt_CFL [code])')

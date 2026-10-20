@@ -66,9 +66,6 @@ draw_fieldlines_xz = True
 # 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
 slice_half_thickness_cells = 2.0
 
-# 白抜きにする球対称シンク領域の半径 [AU]
-sink_radius_au = 1000.0
-
 # 図のサイズ
 figsize = (9, 8)
 
@@ -810,10 +807,7 @@ def plot_xz_density_with_fieldlines(
         Bproj_grid = None
         has_projected_field = False
 
-    # シンク球と断面の交差領域は、密度だけを白抜きにする。
-    # 磁力線はシンク内部も含めて連続的に描画する。
-    sink_mask_grid = np.hypot(X, Z) < sink_radius_au
-    rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
+    rho_grid_plot = rho_grid
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")
@@ -1230,9 +1224,6 @@ draw_fieldlines_xy = True
 # x-y面の法線（z方向）に平均する共通の半厚み [AU]。
 # AMRレベルによらず、全MeshBlockで同じ物理厚みを使う。
 slice_half_thickness_au = 1000.0
-
-# 白抜きにする球対称シンク領域の半径 [AU]
-sink_radius_au = 1000.0
 
 # 図のサイズ
 figsize = (9, 8)
@@ -2072,10 +2063,7 @@ def plot_xy_density_with_fieldlines(
         By_direction = None
         has_projected_field = False
 
-    # シンク球と断面の交差領域は、密度だけを白抜きにする。
-    # 磁力線はシンク内部も含めて連続的に描画する。
-    sink_mask_grid = np.hypot(X, Y) < sink_radius_au
-    rho_grid_plot = np.ma.masked_where(sink_mask_grid, rho_grid)
+    rho_grid_plot = rho_grid
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")

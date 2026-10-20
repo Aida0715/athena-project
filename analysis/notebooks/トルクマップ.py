@@ -147,9 +147,6 @@ DENSITY_PERCENTILES = (
 # トルク・流束の全時刻共通範囲
 TORQUE_ABS_PERCENTILE = 99.0
 
-# シンク内部を統計から除外
-SINK_RADIUS_AU = 1000.0
-
 # 極端に遅い領域の矢印を非表示
 MIN_SPEED_FRACTION = 0.01
 
@@ -1010,18 +1007,9 @@ for index, step_info in enumerate(
 
     snapshots.append(snapshot)
 
-    radius_au = (
-        np.hypot(
-            snapshot["x_code"],
-            snapshot["y_code"],
-        )
-        * LENGTH_UNIT_AU
-    )
-
     density_mask = (
         np.isfinite(snapshot["rho_code"])
         & (snapshot["rho_code"] > 0.0)
-        & (radius_au >= SINK_RADIUS_AU)
     )
 
     density_samples.append(
@@ -1085,24 +1073,11 @@ for index, snapshot in enumerate(
         SCALE_SCAN_RESOLUTION,
     )
 
-    radius_au = (
-        np.hypot(
-            diagnostic["X_code"],
-            diagnostic["Y_code"],
-        )
-        * LENGTH_UNIT_AU
-    )
-
-    outside_sink = (
-        radius_au >= SINK_RADIUS_AU
-    )
-
     for key in diagnostic_samples:
         values = diagnostic[key]
 
         mask = (
-            outside_sink
-            & np.isfinite(values)
+            np.isfinite(values)
         )
 
         diagnostic_samples[key].append(
