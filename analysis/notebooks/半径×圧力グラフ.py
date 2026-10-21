@@ -9,7 +9,16 @@ import numpy as np
 import pyvista as pv
 import matplotlib.pyplot as plt
 import natsort
-from toyouchi_metadata import load_toyouchi_metadata
+try:
+    from toyouchi_metadata import load_toyouchi_metadata
+except ModuleNotFoundError:
+    import json
+    from pathlib import Path
+    def load_toyouchi_metadata(data_path):
+        directory = Path(data_path).expanduser().resolve(); directory = directory if directory.is_dir() else directory.parent
+        preferred = directory / "Toyouchi.metadata.json"; candidates = [preferred] if preferred.is_file() else sorted(directory.glob("*.metadata.json"))
+        if len(candidates) != 1: raise FileNotFoundError(f"Expected one metadata JSON in {directory}; found {len(candidates)}")
+        metadata = json.loads(candidates[0].read_text(encoding="utf-8")); metadata["_path"] = str(candidates[0]); return metadata
 
 vtk_dir = os.path.expanduser("~/athena-project/results/〇〇")
 

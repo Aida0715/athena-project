@@ -22,7 +22,18 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display
-from toyouchi_metadata import load_toyouchi_metadata, run_units
+try:
+    from toyouchi_metadata import load_toyouchi_metadata, run_units
+except ModuleNotFoundError:
+    import json
+    def load_toyouchi_metadata(data_path):
+        directory = Path(data_path).expanduser().resolve(); directory = directory if directory.is_dir() else directory.parent
+        preferred = directory / "Toyouchi.metadata.json"; candidates = [preferred] if preferred.is_file() else sorted(directory.glob("*.metadata.json"))
+        if len(candidates) != 1: raise FileNotFoundError(f"Expected one metadata JSON in {directory}; found {len(candidates)}")
+        metadata = json.loads(candidates[0].read_text(encoding="utf-8")); metadata["_path"] = str(candidates[0]); return metadata
+    def run_units(metadata):
+        keys = ("mass_cgs", "length_cgs", "time_cgs", "velocity_cgs", "density_cgs", "pressure_cgs", "magnetic_field_gauss", "acceleration_cgs", "gravity_constant_code")
+        return {key: float(metadata["units"][key]) for key in keys}
 
 DATA_DIR = Path("/work/beta/aida/results/Toyouchi-test55").expanduser().resolve()
 # 複数指定時はrestartの古い順。NoneならDATA_DIR直下の*.logを名前順に読む。
