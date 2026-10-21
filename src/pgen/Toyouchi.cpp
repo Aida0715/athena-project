@@ -227,7 +227,10 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "    \"x2min_code\": " << pm->mesh_size.x2min << ",\n"
       << "    \"x2max_code\": " << pm->mesh_size.x2max << ",\n"
       << "    \"x3min_code\": " << pm->mesh_size.x3min << ",\n"
-      << "    \"x3max_code\": " << pm->mesh_size.x3max << "\n"
+      << "    \"x3max_code\": " << pm->mesh_size.x3max << ",\n"
+      << "    \"nx1\": " << pm->mesh_size.nx1 << ",\n"
+      << "    \"nx2\": " << pm->mesh_size.nx2 << ",\n"
+      << "    \"nx3\": " << pm->mesh_size.nx3 << "\n"
       << "  }\n"
       << "}\n";
   out.close();
