@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import natsort
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 vtk_dir = os.path.expanduser("~/athena-project/results/〇〇")
 
@@ -18,23 +19,22 @@ xc, yc, zc = 0.0, 0.0, 0.0
 r_max = 244.0
 n_bins = 25
 
-M_UNIT_CGS = 3.97694e33
-L_UNIT_CGS = 1.495978707e15
-T_UNIT_CGS = 3.15576e10
-G_CGS = 6.67430e-8
-G = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
+G = RUN_UNITS["gravity_constant_code"]
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
 LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 
 # Wise et al. (2019) 包有質量フィット（Toyouchi.cpp と同一）
-FIT_RMIN_AU = 139.9720348
-FIT_RMAX_AU = 146698.0663
-MASS_COEFF = np.array([
-    4.948071878736e-02, -1.267318191930e+00, 1.374036982238e+01,
-    -8.163479027134e+01, 2.867189886433e+02, -5.954534679897e+02,
-    6.808026360863e+02, -3.349246300414e+02,
-])
+FIT_RMIN_AU = float(METADATA["initial_conditions"]["fit_rmin_au"])
+FIT_RMAX_AU = float(METADATA["initial_conditions"]["fit_rmax_au"])
+MASS_COEFF = np.asarray(
+    METADATA["initial_conditions"]["mass_fit_coefficients"], dtype=float
+)
 
 _x_core = np.log10(FIT_RMIN_AU)
 _slope_core = np.polyval(np.polyder(MASS_COEFF), _x_core)

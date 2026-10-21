@@ -9,6 +9,7 @@ import numpy as np
 import pyvista as pv
 import matplotlib.pyplot as plt
 import natsort
+from toyouchi_metadata import load_toyouchi_metadata
 
 vtk_dir = os.path.expanduser("~/athena-project/results/〇〇")
 
@@ -17,7 +18,8 @@ xc, yc, zc = 0.0, 0.0, 0.0     # 球中心
 r_max = 1000.0                # 評価する最大半径 [code length]
 n_bins = 200                  # 球殻数（滑らかさはここ）
 
-cs_code = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
+metadata = load_toyouchi_metadata(vtk_dir)
+cs_code = float(metadata["hydro"]["sound_speed_code"])
 
 # 出力
 output_dir = "./radial_pressure_profiles"

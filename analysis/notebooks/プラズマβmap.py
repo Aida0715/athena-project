@@ -8,7 +8,7 @@
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=17.346823586722763（8.22321048489829 km/s）
+#   ・等温音速は実行ディレクトリのmetadata JSONから取得
 #   ・Athena++規格：Pmag=B^2/2
 #
 # 必要パッケージ：numpy, scipy, matplotlib, pyvista
@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter, LogLocator
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -41,9 +42,6 @@ output_dir_full = vtk_dir / "xz_plasma_beta_full"
 output_dir_zoom10 = vtk_dir / "xz_plasma_beta_zoom_1over10"
 output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
-
-# 等温音速（コード単位）
-CS_CODE = 17.346823586722763
 
 # βの共通表示範囲。添付図と同じく 10^-1 ～ 10^2
 # 自動範囲にしたい場合は両方をNoneにする
@@ -75,12 +73,14 @@ SHOW_IMAGES = False
 
 
 # ============================================================
-# 2. コード単位
+# 2. 計算が出力したメタデータ
 # ============================================================
-
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-T_UNIT_CGS = 3.15576e10      # 1 kyr
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
+CS_CODE = float(METADATA["hydro"]["sound_speed_code"])
 
 AU_CGS = 1.495978707e13
 YEAR_CGS = 365.25 * 24.0 * 3600.0
@@ -556,7 +556,7 @@ print(f"1/10 zoom images   : {len(saved_zoom10)} -> {output_dir_zoom10}")
 #   ・全計算領域 + 各軸幅1/10 zoom
 #   ・距離：AU（例 x [10^4 AU]）
 #   ・時間：Myr
-#   ・等温音速 cs=17.346823586722763（8.22321048489829 km/s）
+#   ・等温音速は実行ディレクトリのmetadata JSONから取得
 #   ・Athena++規格：Pmag=B^2/2
 #   ・x-z面への投影磁場(Bx,Bz)を細い黒線で重ねる
 #
@@ -575,6 +575,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter, LogLocator
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -590,9 +591,6 @@ output_dir_full = vtk_dir / "xz_plasma_beta_with_Blines_full"
 output_dir_zoom10 = vtk_dir / "xz_plasma_beta_with_Blines_zoom_1over10"
 output_dir_full.mkdir(parents=True, exist_ok=True)
 output_dir_zoom10.mkdir(parents=True, exist_ok=True)
-
-# 等温音速（コード単位）
-CS_CODE = 17.346823586722763
 
 # βの共通表示範囲：全stepの1--99 percentileから自動決定
 BETA_VMIN = None
@@ -628,12 +626,14 @@ SHOW_IMAGES = False
 
 
 # ============================================================
-# 2. コード単位
+# 2. 計算が出力したメタデータ
 # ============================================================
-
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-T_UNIT_CGS = 3.15576e10      # 1 kyr
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
+CS_CODE = float(METADATA["hydro"]["sound_speed_code"])
 
 AU_CGS = 1.495978707e13
 YEAR_CGS = 365.25 * 24.0 * 3600.0

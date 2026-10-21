@@ -7,17 +7,17 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-
-# Toyouchi 新コード単位系: T0 = 1 kyr
-T_UNIT_CGS = 3.15576e10
-YEAR_CGS = 365.25 * 24.0 * 3600.0
-TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 # ============================================
 # hst ファイル読み込み
 # ============================================
 
 file = "/home/aian/athenapp/results/〇〇/〇〇.hst"
+
+T_UNIT_CGS = run_units(load_toyouchi_metadata(os.path.dirname(file)))["time_cgs"]
+YEAR_CGS = 365.25 * 24.0 * 3600.0
+TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
 
 data = np.loadtxt(file)
 

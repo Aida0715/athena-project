@@ -8,6 +8,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ========= 入力ファイル =========
@@ -21,8 +22,9 @@ os.makedirs(output_dir, exist_ok=True)
 
 # ========= 単位定義 =========
 # Toyouchi.cppのコード単位
-T_UNIT_CGS = 3.15576e10  # 1 code time [s] = 1 kyr
-M_UNIT_CGS = 3.97694e33  # 1 code mass [g] = 2 M_sun
+RUN_UNITS = run_units(load_toyouchi_metadata(os.path.dirname(hst_file)))
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
 
 # 物理定数
 YEAR_CGS = 365.25 * 24.0 * 3600.0  # s

@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -83,13 +84,14 @@ print(f"Field lines : {'ON' if draw_fieldlines_xz else 'OFF'}")
 
 
 # ============================================================
-# 2. Toyouchi.cppのコード単位
-# M0=2 M_sun, L0=100 AU, T0=1 kyr
+# 2. Toyouchi.cppが出力した実行時メタデータ
 # ============================================================
 
-Munit = 3.97694e33       # g = 2 M_sun
-Lunit = 1.495978707e15   # cm = 100 AU
-Tunit = 3.15576e10       # s = 1 kyr
+metadata = load_toyouchi_metadata(vtk_dir)
+units = run_units(metadata)
+Munit = units["mass_cgs"]
+Lunit = units["length_cgs"]
+Tunit = units["time_cgs"]
 
 Vunit = Lunit / Tunit
 Rhounit = Munit / Lunit**3
@@ -1184,6 +1186,7 @@ from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay, cKDTree
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -1259,9 +1262,11 @@ print(f"Field lines : {'ON' if draw_fieldlines_xy else 'OFF'}")
 # 2. Toyouchi.cppのコード単位
 # ============================================================
 
-Munit = 3.97694e33       # g = 2 M_sun
-Lunit = 1.495978707e15   # cm = 100 AU
-Tunit = 3.15576e10       # s = 1 kyr
+metadata = load_toyouchi_metadata(vtk_dir)
+units = run_units(metadata)
+Munit = units["mass_cgs"]
+Lunit = units["length_cgs"]
+Tunit = units["time_cgs"]
 
 Vunit = Lunit / Tunit
 Rhounit = Munit / Lunit**3

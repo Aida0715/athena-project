@@ -7,6 +7,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -27,19 +28,8 @@ output_file = output_dir / "stellar_mass_vs_time.png"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 
-# ============================================================
-# 2. 単位系
-# ============================================================
-M_UNIT_CGS = 3.97694e33  # 2 M_sun
-T_UNIT_CGS = 3.15576e10  # 1 kyr
 MSUN_CGS = 1.98847e33
 YEAR_CGS = 365.25 * 24.0 * 3600.0
-
-MASS_UNIT_MSUN = M_UNIT_CGS / MSUN_CGS
-TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
-
-print(f"[INFO] 1 code mass = {MASS_UNIT_MSUN:.6e} M_sun")
-print(f"[INFO] 1 code time = {TIME_UNIT_KYR:.6e} kyr")
 
 
 # ============================================================
@@ -149,6 +139,9 @@ def clean_restart_history(time_raw, value_raw):
 # 6. 1計算分のMstarを読み込む
 # ============================================================
 def load_stellar_mass_history(dataset):
+    units = run_units(load_toyouchi_metadata(dataset["datadir"]))
+    mass_unit_msun = units["mass_cgs"] / MSUN_CGS
+    time_unit_kyr = units["time_cgs"] / (1.0e3 * YEAR_CGS)
     hst_file = dataset["hst_file"]
     column_map = read_hst_column_map(hst_file)
     if not column_map:
@@ -175,8 +168,8 @@ def load_stellar_mass_history(dataset):
     time_code, mstar_code, restart_count, removed_count = (
         clean_restart_history(time_raw, mstar_raw)
     )
-    time_kyr = time_code * TIME_UNIT_KYR
-    mstar_msun = mstar_code * MASS_UNIT_MSUN
+    time_kyr = time_code * time_unit_kyr
+    mstar_msun = mstar_code * mass_unit_msun
 
     mass_tolerance = max(
         1.0e-12, np.max(np.abs(mstar_msun)) * 1.0e-10

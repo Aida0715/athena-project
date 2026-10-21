@@ -38,6 +38,7 @@ import pyvista as pv
 from matplotlib.colors import LogNorm, SymLogNorm
 from matplotlib.ticker import FuncFormatter
 from scipy.interpolate import griddata
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -71,11 +72,13 @@ if not vtk_dir.is_dir():
 
 
 # ============================================================
-# コード単位
+# 計算が出力したメタデータ
 # ============================================================
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-T_UNIT_CGS = 3.15576e10      # 1 kyr
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -127,7 +130,7 @@ print(
 PLOT_RADIUS_AU = 1.0e5
 
 # 等温音速（code velocity）
-ISO_SOUND_SPEED_CODE = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
+ISO_SOUND_SPEED_CODE = float(METADATA["hydro"]["sound_speed_code"])
 
 # 本描画解像度
 MAP_RESOLUTION = 700

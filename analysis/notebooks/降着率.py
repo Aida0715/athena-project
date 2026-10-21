@@ -8,6 +8,7 @@ from pathlib import Path
 import os, re
 import matplotlib.pyplot as plt
 import numpy as np
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 # 2本目以降は datadir2 / curve_name2 を追加。
 datadir1 = "~/athena-project/results/○○"
@@ -18,10 +19,7 @@ OUTPUT_DIR = Path("./gas_mass_change_rate").resolve()
 OUTPUT_FILE = OUTPUT_DIR / "gas_mass_change_rate.png"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-M_UNIT_CGS, T_UNIT_CGS = 3.97694e33, 3.15576e10
 MSUN_CGS, YEAR_CGS = 1.98847e33, 365.25*86400.
-TIME_TO_KYR = T_UNIT_CGS/(1.e3*YEAR_CGS)
-RATE_TO_MSUN_PER_YR = (M_UNIT_CGS/MSUN_CGS)/(T_UNIT_CGS/YEAR_CGS)
 
 def collect(namespace):
     numbers = sorted(int(m.group(1)) for key in namespace if (m := re.fullmatch(r"datadir(\d+)",key)))
@@ -45,6 +43,10 @@ def columns(path):
     return result
 
 def curve(path):
+    units = run_units(load_toyouchi_metadata(path.parent))
+    time_to_kyr = units["time_cgs"]/(1.e3*YEAR_CGS)
+    rate_to_msun_per_yr = ((units["mass_cgs"]/MSUN_CGS) /
+                           (units["time_cgs"]/YEAR_CGS))
     cmap = columns(path)
     if "time" not in cmap or "mass" not in cmap: raise KeyError(f"time/mass column missing: {path}")
     table = np.loadtxt(path,comments="#",ndmin=2)
@@ -54,7 +56,7 @@ def curve(path):
     _,reverse_index=np.unique(time[::-1],return_index=True); keep=np.sort(len(time)-1-reverse_index)
     time,mass=time[keep],mass[keep]
     if len(time)<2: raise RuntimeError(f"At least two unique times required: {path}")
-    return time*TIME_TO_KYR,-np.gradient(mass,time)*RATE_TO_MSUN_PER_YR
+    return time*time_to_kyr,-np.gradient(mass,time)*rate_to_msun_per_yr
 
 fig,ax=plt.subplots(figsize=(9,5.5))
 for path,label in collect(globals()):

@@ -7,6 +7,7 @@ import csv, gc, re
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 # ======================== ユーザー設定 ========================
 DATA_DIR = Path("~/athena-project/results/○○").expanduser()
@@ -16,13 +17,16 @@ OUTPUT_DIR = DATA_DIR / "checks"
 SHOW_PLOTS = True
 
 # 現行の基準単位
-M_UNIT_G, L_UNIT_CM, T_UNIT_S = 3.97694e33, 1.495978707e15, 3.15576e10
+RUN_UNITS = run_units(load_toyouchi_metadata(DATA_DIR))
+M_UNIT_G = RUN_UNITS["mass_cgs"]
+L_UNIT_CM = RUN_UNITS["length_cgs"]
+T_UNIT_S = RUN_UNITS["time_cgs"]
 MSUN_G = 1.98847e33
 TIME_KYR = T_UNIT_S / (1.e3 * 365.25 * 86400.)
 MASS_MSUN = M_UNIT_G / MSUN_G
 V_UNIT = L_UNIT_CM / T_UNIT_S
 RHO_UNIT = M_UNIT_G / L_UNIT_CM**3
-B_UNIT = np.sqrt(4.*np.pi*RHO_UNIT*V_UNIT**2)
+B_UNIT = RUN_UNITS["magnetic_field_gauss"]
 E_UNIT = M_UNIT_G * V_UNIT**2
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

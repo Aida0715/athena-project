@@ -20,14 +20,9 @@ import warnings
 import numpy as np
 import matplotlib.pyplot as plt
 import pyvista as pv
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
-# Toyouchi-test76 の <units>
-L_UNIT_CM = 1.495978707e15       # 100 AU
-T_UNIT_S = 3.15576e10            # 1 kyr
 AU_CM = 1.495978707e13
-LENGTH_UNIT_AU = L_UNIT_CM / AU_CM
-VELOCITY_UNIT_KMS = (L_UNIT_CM / T_UNIT_S) / 1.0e5
-ACCELERATION_UNIT_CGS = L_UNIT_CM / T_UNIT_S**2
 
 DATADIR = Path('~/athena-project/results/〇〇').expanduser()
 OUTPUT_DIR = Path('./radial_acceleration_profiles')
@@ -37,6 +32,12 @@ N_BINS = 60
 CENTER = None                # None: 領域中央、または (x, y, z) [code]
 WEIGHT = 'volume'            # 'volume' / 'mass'
 FULL_SHELLS_ONLY = True      # False: 隅まで含む（外側は部分球殻）
+
+METADATA = load_toyouchi_metadata(DATADIR)
+RUN_UNITS = run_units(METADATA)
+LENGTH_UNIT_AU = RUN_UNITS['length_cgs'] / AU_CM
+VELOCITY_UNIT_KMS = RUN_UNITS['velocity_cgs'] / 1.0e5
+ACCELERATION_UNIT_CGS = RUN_UNITS['acceleration_cgs']
 
 VECTORS = {'self': 'gself', 'pressure': 'apres', 'magnetic': 'amag'}
 LABELS = {
@@ -190,8 +191,7 @@ def main():
     if WEIGHT not in ('volume', 'mass') or N_BINS < 2:
         raise ValueError('Invalid WEIGHT or N_BINS')
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    warnings.warn('Physical-unit conversion assumes Toyouchi-test76 units: '
-                  'L0=100 AU and T0=1 kyr. '
+    warnings.warn(f"Physical-unit conversion loaded from {METADATA['_path']}. "
                   'NFW stored scalar is a reference, excluded from sum. '
                   'Initial gr_star/gr_nfw may be uninitialized zeros.')
     for step, paths in collect_steps(DATADIR).items():

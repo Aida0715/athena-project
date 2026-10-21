@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 DATA_DIR = Path("/work/beta/aida/results/Toyouchi-test55").expanduser().resolve()
 # 複数指定時はrestartの古い順。NoneならDATA_DIR直下の*.logを名前順に読む。
@@ -32,10 +33,18 @@ EXPECTED_BLOCKS = None  # SMRの総MeshBlock数が分かれば必ず指定。Non
 SNAPSHOT_STRIDE = 1
 TOP_K = 10
 SMALL_DT = 1e-6  # code time
-CFL = 0.3
-CS = 17.346823586722763  # sound_speed_kms=8.22321048489829, L0=100 AU, T0=1 kyr
-ROOT_DX = np.array([448/40]*3)
-L_UNIT_CM, T_UNIT_S = 1.495978707e15, 3.15576e10
+METADATA = load_toyouchi_metadata(DATA_DIR)
+RUN_UNITS = run_units(METADATA)
+CFL = float(METADATA["hydro"]["cfl_number"])
+CS = float(METADATA["hydro"]["sound_speed_code"])
+mesh_meta = METADATA["mesh"]
+ROOT_DX = np.array([
+    (mesh_meta["x1max_code"]-mesh_meta["x1min_code"])/mesh_meta["nx1"],
+    (mesh_meta["x2max_code"]-mesh_meta["x2min_code"])/mesh_meta["nx2"],
+    (mesh_meta["x3max_code"]-mesh_meta["x3min_code"])/mesh_meta["nx3"],
+])
+L_UNIT_CM = RUN_UNITS["length_cgs"]
+T_UNIT_S = RUN_UNITS["time_cgs"]
 AU_CM = 1.495978707e13
 L_AU = L_UNIT_CM/AU_CM
 T_YR = T_UNIT_S/(365.25*86400)

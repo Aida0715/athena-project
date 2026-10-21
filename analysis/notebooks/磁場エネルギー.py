@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -30,29 +31,7 @@ output_file = output_dir / "total_magnetic_energy_vs_time.png"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 
-# ============================================================
-# 2. Toyouchi.cppの新単位系（M0=2 M_sun, L0=100 AU, T0=1 kyr）
-# ============================================================
-M_UNIT_CGS = 3.97694e33       # g = 2 M_sun
-L_UNIT_CGS = 1.495978707e15   # cm = 100 AU
-T_UNIT_CGS = 3.15576e10       # s = 1 kyr
-
 YEAR_CGS = 365.25 * 24.0 * 3600.0
-TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
-
-V_UNIT_CGS = L_UNIT_CGS / T_UNIT_CGS
-RHO_UNIT_CGS = M_UNIT_CGS / L_UNIT_CGS**3
-P_UNIT_CGS = RHO_UNIT_CGS * V_UNIT_CGS**2
-B_UNIT_GAUSS = np.sqrt(4.0 * np.pi * P_UNIT_CGS)
-
-# code magnetic energy (B_code^2/2 * V_code) -> erg
-MAGNETIC_ENERGY_UNIT_ERG = P_UNIT_CGS * L_UNIT_CGS**3
-
-print(f"[INFO] 1 code time = {TIME_UNIT_KYR:.6e} kyr")
-print(f"[INFO] 1 code magnetic field = {B_UNIT_GAUSS:.6e} G")
-print(
-    f"[INFO] 1 code energy = {MAGNETIC_ENERGY_UNIT_ERG:.6e} erg"
-)
 
 
 # ============================================================
@@ -174,6 +153,10 @@ def block_magnetic_energy_erg(filename):
 # 6. 1計算分を逐次解析
 # ============================================================
 def analyze_dataset(dataset):
+    global MAGNETIC_ENERGY_UNIT_ERG
+    units = run_units(load_toyouchi_metadata(dataset["datadir"]))
+    time_unit_kyr = units["time_cgs"] / (1.0e3 * YEAR_CGS)
+    MAGNETIC_ENERGY_UNIT_ERG = units["pressure_cgs"] * units["length_cgs"]**3
     directory = dataset["datadir"]
     vtk_pattern = (
         f"*.block*.out{vtk_output_number}.*.vtk"
@@ -218,7 +201,7 @@ def analyze_dataset(dataset):
             if block_index % 128 == 0:
                 gc.collect()
 
-        time_kyr_values.append(time_code * TIME_UNIT_KYR)
+        time_kyr_values.append(time_code * time_unit_kyr)
         energy_erg_values.append(total_energy_erg)
         block_count_values.append(len(step_files))
 

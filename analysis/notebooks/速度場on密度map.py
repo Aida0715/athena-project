@@ -26,6 +26,7 @@ import numpy as np
 import pyvista as pv
 from matplotlib.colors import LogNorm
 from scipy.interpolate import griddata
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -61,9 +62,11 @@ if not vtk_dir.is_dir():
 # ============================================================
 # 2. 単位系
 # ============================================================
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-T_UNIT_CGS = 3.15576e10      # 1 kyr
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33
@@ -1414,6 +1417,7 @@ import numpy as np
 import pyvista as pv
 from matplotlib.colors import LogNorm
 from scipy.interpolate import griddata
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -1450,9 +1454,11 @@ if not vtk_dir.is_dir():
 # ============================================================
 # 2. 単位系
 # ============================================================
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-T_UNIT_CGS = 3.15576e10      # 1 kyr
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
 
 AU_CGS = 1.495978707e13
 MSUN_CGS = 1.98847e33

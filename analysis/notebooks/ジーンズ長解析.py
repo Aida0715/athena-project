@@ -19,23 +19,30 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 # IDEから実行するときの設定。対象runの値に変更する。
 DATADIR = "~/athena-project/results/〇〇"
-ISO_SOUND_SPEED_CODE = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 OUTPUT_DIR = "./jeans_diagnostics"
 THRESHOLDS = (4, 8, 16, 32)
 # 全領域を診断。中心のみなら例: ((-5000, 5000),) * 3 [au]
 ANALYSIS_BOUNDS_AU = None
 SLICE_HALF_WIDTH_AU = 5000.0
-L_UNIT_CGS = 1.495978707e15  # 100 AU
-M_UNIT_CGS = 3.97694e33      # 2 M_sun
-T_UNIT_CGS = 3.15576e10      # 1 kyr
 AU_CGS = 1.495978707e13
-G_CGS = 6.67430e-8
-L_AU = L_UNIT_CGS / AU_CGS
-T_KYR = T_UNIT_CGS / (365.25 * 86400 * 1000)
-GRAV_CONST_CODE = G_CGS * M_UNIT_CGS * T_UNIT_CGS**2 / L_UNIT_CGS**3
+
+
+def apply_runtime_metadata(directory):
+    global METADATA, ISO_SOUND_SPEED_CODE, L_UNIT_CGS, M_UNIT_CGS
+    global T_UNIT_CGS, L_AU, T_KYR, GRAV_CONST_CODE
+    METADATA = load_toyouchi_metadata(directory)
+    units = run_units(METADATA)
+    ISO_SOUND_SPEED_CODE = float(METADATA["hydro"]["sound_speed_code"])
+    L_UNIT_CGS = units["length_cgs"]
+    M_UNIT_CGS = units["mass_cgs"]
+    T_UNIT_CGS = units["time_cgs"]
+    L_AU = L_UNIT_CGS / AU_CGS
+    T_KYR = T_UNIT_CGS / (365.25 * 86400 * 1000)
+    GRAV_CONST_CODE = units["gravity_constant_code"]
 
 
 def vtk_time(path):
@@ -122,6 +129,7 @@ def draw_slice(ax, xyz, delta, nj, selected, args, norm=None, cmap="viridis"):
 
 
 def analyze(args):
+    apply_runtime_metadata(args.datadir)
     cs = float(ISO_SOUND_SPEED_CODE)
     grav = float(GRAV_CONST_CODE)
     if not (np.isfinite(cs) and np.isfinite(grav) and cs > 0 and grav > 0):
@@ -327,6 +335,7 @@ def estimate_refinement(argv=None):
     from matplotlib.colors import BoundaryNorm
 
     args = parse_arguments(argv)
+    apply_runtime_metadata(args.datadir)
     args.half_width_au = REFINEMENT_HALF_WIDTH_AU
     args.slice_every = REFINEMENT_SLICE_EVERY
     target = float(TARGET_JEANS_CELLS)

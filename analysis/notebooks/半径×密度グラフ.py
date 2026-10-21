@@ -10,6 +10,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -40,13 +41,14 @@ os.makedirs(output_dir, exist_ok=True)
 
 
 # ============================================================
-# 2. Toyouchi.cppの新コード単位系
-# M0=2 M_sun, L0=100 AU, T0=1 kyr
+# 2. Toyouchi.cppが出力した実行時メタデータ
 # ============================================================
 
-M_UNIT_CGS = 3.97694e33
-L_UNIT_CGS = 1.495978707e15
-T_UNIT_CGS = 3.15576e10
+METADATA = load_toyouchi_metadata(vtk_dir)
+RUN_UNITS = run_units(METADATA)
+M_UNIT_CGS = RUN_UNITS["mass_cgs"]
+L_UNIT_CGS = RUN_UNITS["length_cgs"]
+T_UNIT_CGS = RUN_UNITS["time_cgs"]
 
 AU_CGS = 1.495978707e13
 YEAR_CGS = 365.25 * 24.0 * 3600.0
@@ -55,7 +57,7 @@ RHO_UNIT_CGS = M_UNIT_CGS / L_UNIT_CGS**3
 LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
 
-print("=== New Toyouchi code units ===")
+print(f"=== Units from {METADATA['_path']} ===")
 print(f"1 code length  = {LENGTH_UNIT_AU:.6f} AU")
 print(f"1 code time    = {TIME_UNIT_KYR:.6f} kyr")
 print(f"1 code density = {RHO_UNIT_CGS:.6e} g cm^-3")

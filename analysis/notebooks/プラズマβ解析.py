@@ -18,6 +18,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
+from toyouchi_metadata import load_toyouchi_metadata, run_units
 
 
 # ============================================================
@@ -46,8 +47,6 @@ analysis_bounds_au = None
 # 例: analysis_bounds_code = ((-5.0, 5.0), (-5.0, 5.0), (-2.0, 2.0))
 analysis_bounds_code = None
 
-# athinput.Toyouchi_63の新単位系（L0=100 AU, T0=1 kyr）に対応する等温音速。
-ISO_SOUND_SPEED_CODE = 17.346823586722763  # 8.22321048489829 km/s (T=1e4 K, mu=1.22)
 vtk_output_number = 2
 
 output_dir = Path("./plasma_beta_history").resolve()
@@ -56,22 +55,10 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
-# 2. Toyouchi.cppの新単位系（M0=2 M_sun, L0=100 AU, T0=1 kyr）
+# 2. 物理定数（run固有値はJSONから読む）
 # ============================================================
-M_UNIT_CGS = 3.97694e33       # g = 2 M_sun
-L_UNIT_CGS = 1.495978707e15   # cm = 100 AU
-T_UNIT_CGS = 3.15576e10       # s = 1 kyr
-
 YEAR_CGS = 365.25 * 24.0 * 3600.0
 AU_CGS = 1.495978707e13
-TIME_UNIT_KYR = T_UNIT_CGS / (1.0e3 * YEAR_CGS)
-V_UNIT_CGS = L_UNIT_CGS / T_UNIT_CGS
-RHO_UNIT_CGS = M_UNIT_CGS / L_UNIT_CGS**3
-P_UNIT_CGS = RHO_UNIT_CGS * V_UNIT_CGS**2
-PV_UNIT_ERG = P_UNIT_CGS * L_UNIT_CGS**3
-
-print(f"[INFO] 1 code time = {TIME_UNIT_KYR:.6e} kyr")
-print(f"[INFO] cs(code)    = {ISO_SOUND_SPEED_CODE:.6g}")
 
 
 # ============================================================
@@ -103,6 +90,7 @@ def collect_datasets(namespace):
             "number": number,
             "datadir": directory,
             "curve_name": str(namespace[curve_key]),
+            "metadata": load_toyouchi_metadata(directory),
         })
     return datasets
 
@@ -172,7 +160,7 @@ def detect_domain_bounds(step_files):
     return domain
 
 
-def make_analysis_bounds(domain):
+def make_analysis_bounds(domain, length_unit_cgs):
     if analysis_bounds_au is not None and analysis_bounds_code is not None:
         raise ValueError(
             "Specify only one of analysis_bounds_au and analysis_bounds_code."
@@ -185,7 +173,7 @@ def make_analysis_bounds(domain):
                 "analysis_bounds_au must have shape "
                 "((xmin,xmax),(ymin,ymax),(zmin,zmax))."
             )
-        bounds = (bounds_array * AU_CGS / L_UNIT_CGS).reshape(-1)
+        bounds = (bounds_array * AU_CGS / length_unit_cgs).reshape(-1)
     elif analysis_bounds_code is not None:
         bounds_array = np.asarray(analysis_bounds_code, dtype=float)
         if bounds_array.shape != (3, 2):
@@ -221,7 +209,7 @@ def make_analysis_bounds(domain):
 # ============================================================
 # 6. 1 MeshBlockの圧力体積を積分
 # ============================================================
-def integrate_block(filename, region):
+def integrate_block(filename, region, sound_speed_code):
     grid = pv.read(filename)
     centers = None
     try:
@@ -285,7 +273,7 @@ def integrate_block(filename, region):
             return 0.0, 0.0, 0.0, 0
 
         volume = overlap_volume[finite]
-        gas_pressure = rho[finite] * ISO_SOUND_SPEED_CODE**2
+        gas_pressure = rho[finite] * sound_speed_code**2
         magnetic_pressure = 0.5 * np.einsum(
             "ij,ij->i", magnetic[finite], magnetic[finite]
         )
@@ -305,14 +293,20 @@ def integrate_block(filename, region):
 # 7. 1計算分を低メモリで逐次解析
 # ============================================================
 def analyze_dataset(dataset):
+    metadata = dataset["metadata"]
+    units = run_units(metadata)
+    sound_speed_code = float(metadata["hydro"]["sound_speed_code"])
+    time_unit_kyr = units["time_cgs"] / (1.0e3 * YEAR_CGS)
+    pv_unit_erg = units["pressure_cgs"] * units["length_cgs"]**3 if "pressure_cgs" in units else units["mass_cgs"]*units["velocity_cgs"]**2
     files_by_step = group_vtk_files(dataset["datadir"])
     steps = sorted(files_by_step)
     domain = detect_domain_bounds(files_by_step[steps[0]])
-    region = make_analysis_bounds(domain)
+    region = make_analysis_bounds(domain, units["length_cgs"])
 
     print(
         f"\n[DATASET {dataset['number']}] {dataset['curve_name']}\n"
         f"  directory = {dataset['datadir']}\n"
+        f"  metadata  = {metadata['_path']}\n"
         f"  steps     = {len(steps)}\n"
         f"  domain    = x[{domain[0]:.6g},{domain[1]:.6g}] "
         f"y[{domain[2]:.6g},{domain[3]:.6g}] "
@@ -331,7 +325,7 @@ def analyze_dataset(dataset):
 
         for block_index, filename in enumerate(step_files, start=1):
             gas_part, magnetic_part, volume_part, cells_part = integrate_block(
-                filename, region
+                filename, region, sound_speed_code
             )
             gas_pv_code += gas_part
             magnetic_pv_code += magnetic_part
@@ -349,10 +343,10 @@ def analyze_dataset(dataset):
         )
         rows.append((
             step,
-            time_code * TIME_UNIT_KYR,
+            time_code * time_unit_kyr,
             beta_global,
-            gas_pv_code * PV_UNIT_ERG,
-            magnetic_pv_code * PV_UNIT_ERG,
+            gas_pv_code * pv_unit_erg,
+            magnetic_pv_code * pv_unit_erg,
             integrated_volume_code,
             selected_cells,
             len(step_files),
