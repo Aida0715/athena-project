@@ -1,220 +1,294 @@
 # -*- coding: utf-8 -*-
-# Converted from Vφプロファイル.ipynb
+"""SMR VTKから円筒円環平均したv_phiプロファイルを作る。
 
-# %% cell 1
-import pyvista as pv
-import numpy as np
+重力成分iの円筒動径加速度g_R,iから
+    v_c,i^2 = -R <g_R,i>
+を計算する。合計は速度の線形和ではなく、
+    v_c,total^2 = -R <g_R,self + g_R,star + g_R,nfw>
+である。実際のガス速度から求めた<v_phi>も比較用に描画する。
+黒線は内向きのガス自己重力＋中心星重力＋NFW重力と釣り合うために必要なVφである。
+つまり紫の点線〜黒線なら概ね回転平衡、黒線＞紫点線なら回転支持不足の可能性と読むことができる。
+なお中心星重力曲線は質量加重平均をされるガスの鉛直分布が変化すると上下することがあるが、これは中心星質量が上昇したわけではないので注意。
+"""
+
+from collections import defaultdict
+from pathlib import Path
+import csv
+import gc
+import json
+import re
+import warnings
+
 import matplotlib.pyplot as plt
-import os
-import natsort
-try:
-    from toyouchi_metadata import load_toyouchi_metadata, run_units
-except ModuleNotFoundError:
-    import json
-    from pathlib import Path
-    def load_toyouchi_metadata(data_path):
-        directory = Path(data_path).expanduser().resolve(); directory = directory if directory.is_dir() else directory.parent
-        preferred = directory / "Toyouchi.metadata.json"; candidates = [preferred] if preferred.is_file() else sorted(directory.glob("*.metadata.json"))
-        if len(candidates) != 1: raise FileNotFoundError(f"Expected one metadata JSON in {directory}; found {len(candidates)}")
-        metadata = json.loads(candidates[0].read_text(encoding="utf-8")); metadata["_path"] = str(candidates[0]); return metadata
-    def run_units(metadata):
-        keys = ("mass_cgs", "length_cgs", "time_cgs", "velocity_cgs", "density_cgs", "pressure_cgs", "magnetic_field_gauss", "acceleration_cgs", "gravity_constant_code")
-        return {key: float(metadata["units"][key]) for key in keys}
+import numpy as np
+import pyvista as pv
 
-vtk_dir = os.path.expanduser("~/athena-project/results/〇〇")
+# ============================== ユーザー設定 ==============================
+DATADIR = Path("~/athena-project/results/○○").expanduser().resolve()
+VTK_GLOB = "Toyouchi.block*.out2.*.vtk"
+STEPS = None                         # None: 全VTK時刻
+SKIP_FIRST_SNAPSHOT = True           # 初期診断量が未更新の最初のVTKを除外
+OUTPUT_DIR = DATADIR / "vphi_profiles"
+Z_HALF_WIDTH_AU = 2500.0             # Noneでz方向全域
+R_MIN_AU = None                      # None: 最小セル幅から自動決定
+R_MAX_AU = None                      # None: 完全な円環が入る最大半径
+N_RADIAL_BINS = 80
+MIN_CELLS_PER_BIN = 8
+WEIGHT = "mass"                      # "mass" / "volume"
+FIGSIZE = (8.5, 6.2)
+DPI = 180
+SHOW_IMAGES = False
 
-# ===============================
-# パラメータ（cppと一致）
-# ===============================
-xc, yc, zc = 0.0, 0.0, 0.0
-
-r_max = 244.0
-n_bins = 25
-
-METADATA = load_toyouchi_metadata(vtk_dir)
-RUN_UNITS = run_units(METADATA)
-M_UNIT_CGS = RUN_UNITS["mass_cgs"]
-L_UNIT_CGS = RUN_UNITS["length_cgs"]
-T_UNIT_CGS = RUN_UNITS["time_cgs"]
-G = RUN_UNITS["gravity_constant_code"]
 AU_CGS = 1.495978707e13
-MSUN_CGS = 1.98847e33
-LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
-
-# Wise et al. (2019) 包有質量フィット（Toyouchi.cpp と同一）
-FIT_RMIN_AU = float(METADATA["initial_conditions"]["fit_rmin_au"])
-FIT_RMAX_AU = float(METADATA["initial_conditions"]["fit_rmax_au"])
-MASS_COEFF = np.asarray(
-    METADATA["initial_conditions"]["mass_fit_coefficients"], dtype=float
-)
-
-_x_core = np.log10(FIT_RMIN_AU)
-_slope_core = np.polyval(np.polyder(MASS_COEFF), _x_core)
-_curvature_core = np.polyval(np.polyder(MASS_COEFF, 2), _x_core) / np.log(10.0)
-_core_mass_msun = 10.0**np.polyval(MASS_COEFF, _x_core)
-_core_c = (_curvature_core + _slope_core**2 - 8.0*_slope_core + 15.0) / 8.0
-_core_b = (_slope_core - 3.0) / 2.0 - 2.0*_core_c
-_core_a = 1.0 - _core_b - _core_c
-_bump = max(0.0, 0.25 - _core_a)
-_core_a += _bump
-_core_b -= 3.0*_bump
-_core_c += 3.0*_bump
-_core_d = -_bump
+KYR_CGS = 1.0e3 * 365.25 * 24.0 * 3600.0
 
 
-def menc_wise19_code(r_code):
-    r_au = np.asarray(r_code, dtype=float) * LENGTH_UNIT_AU
-    clipped = np.clip(r_au, FIT_RMIN_AU, FIT_RMAX_AU)
-    mass_msun = 10.0**np.polyval(MASS_COEFF, np.log10(clipped))
-    inner = r_au < FIT_RMIN_AU
-    if np.any(inner):
-        t = np.maximum(r_au[inner], 0.0) / FIT_RMIN_AU
-        mass_msun[inner] = _core_mass_msun*t**3 * (
-            _core_a + t**2*(_core_b + t**2*(_core_c + _core_d*t**2))
-        )
-    return mass_msun * MSUN_CGS / M_UNIT_CGS
+def load_metadata(directory):
+    preferred = directory / "Toyouchi.metadata.json"
+    candidates = [preferred] if preferred.is_file() else sorted(directory.glob("*.metadata.json"))
+    if len(candidates) != 1:
+        raise FileNotFoundError(f"Expected exactly one metadata JSON in {directory}; found {len(candidates)}")
+    metadata = json.loads(candidates[0].read_text(encoding="utf-8"))
+    if metadata.get("format") != "Toyouchi runtime metadata":
+        raise ValueError(f"Unsupported metadata: {candidates[0]}")
+    metadata["_path"] = str(candidates[0])
+    return metadata
 
-z_cut = 2.0
 
-# 出力
-output_dir_log = "./vphi_profiles_log"
-output_dir_lin = "./vphi_profiles_linear"
-os.makedirs(output_dir_log, exist_ok=True)
-os.makedirs(output_dir_lin, exist_ok=True)
+def collect_steps():
+    groups = defaultdict(list)
+    for path in DATADIR.glob(VTK_GLOB):
+        match = re.search(r"\.(\d+)\.vtk$", path.name)
+        if match:
+            step = int(match.group(1))
+            if STEPS is None or step in STEPS:
+                groups[step].append(path)
+    if not groups:
+        raise FileNotFoundError(f"No VTK files: {DATADIR / VTK_GLOB}")
+    return {step: sorted(paths) for step, paths in sorted(groups.items())}
 
-# ======================================
-# VTK ファイル整理
-# ======================================
-vtk_files = natsort.natsorted([
-    os.path.join(vtk_dir, f)
-    for f in os.listdir(vtk_dir)
-    if f.startswith("Toyouchi.block") and f.endswith(".vtk")
-])
 
-step_dict = {}
-for f in vtk_files:
-    step = f.split('.')[-2]
-    step_dict.setdefault(step, []).append(f)
+def read_vtk_time(path):
+    with path.open("rb") as handle:
+        header = handle.read(4096).decode("ascii", errors="ignore")
+    match = re.search(r"\btime\s*=\s*([-+0-9.eEdD]+)", header, flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(f"VTK time was not found: {path}")
+    return float(match.group(1).replace("D", "E").replace("d", "e"))
 
-print(f"Found {len(step_dict)} timesteps")
 
-# ======================================
-# ビン
-# ======================================
-bin_edges = np.logspace(np.log10(1.5), np.log10(r_max), n_bins + 1)
-bin_centers = np.sqrt(bin_edges[:-1] * bin_edges[1:])
+def block_geometry(grid, path):
+    bounds = np.asarray(grid.bounds, dtype=float).reshape(3, 2)
+    dimensions = np.asarray(grid.dimensions, dtype=int) - 1
+    if np.any(dimensions <= 0) or int(np.prod(dimensions)) != grid.n_cells:
+        raise ValueError(f"Unexpected dimensions: {path}; dimensions={grid.dimensions}, n_cells={grid.n_cells}")
+    spacing = (bounds[:, 1] - bounds[:, 0]) / dimensions
+    if np.any(~np.isfinite(spacing)) or np.any(spacing <= 0.0):
+        raise ValueError(f"Invalid cell spacing: {path}; {spacing}")
+    return bounds, spacing
 
-# ======================================
-# 理論 Vphi（cppと一致）
-# ======================================
-def theoretical_vphi(r):
-    M_gas = menc_wise19_code(r)
-    return 0.5 * np.sqrt(G * M_gas / np.maximum(r, 1e-12))
 
-# ======================================
-# timestep loop
-# ======================================
-for step, files in step_dict.items():
+def make_radial_edges(first_paths, full_bounds, length_au):
+    finest_xy = np.inf
+    for path in first_paths:
+        grid = pv.read(path)
+        try:
+            _, spacing = block_geometry(grid, path)
+            finest_xy = min(finest_xy, spacing[0], spacing[1])
+        finally:
+            del grid
+    auto_rmax = min(full_bounds[0, 1], -full_bounds[0, 0], full_bounds[1, 1], -full_bounds[1, 0])
+    # 最内側は1最小セル幅まで表示候補に入れる。ただし、
+    # MIN_CELLS_PER_BINを満たさない円環は後段で自動的に無効にする。
+    rmin = float(R_MIN_AU) / length_au if R_MIN_AU is not None else finest_xy
+    rmax = float(R_MAX_AU) / length_au if R_MAX_AU is not None else auto_rmax
+    if not (np.isfinite(rmin) and np.isfinite(rmax) and 0.0 < rmin < rmax):
+        raise ValueError(f"Invalid radial range: {rmin=} {rmax=} [code]")
+    return np.geomspace(rmin, rmax, int(N_RADIAL_BINS) + 1)
 
-    print(f"Processing step {step}")
 
-    blocks = [pv.read(f) for f in files]
-    grid = pv.MultiBlock(blocks).combine()
+def accumulate_step(paths, edges, z_half_width_code, epsilon_code):
+    required = ("rho", "vel", "gr_star", "gr_nfw", "gself_x", "gself_y", "gself_z")
+    nbins = edges.size - 1
+    denominator = np.zeros(nbins)
+    counts = np.zeros(nbins, dtype=np.int64)
+    totals = {key: np.zeros(nbins) for key in ("vphi_gas", "gR_self", "gR_star", "gR_nfw")}
 
-    centers = grid.cell_centers().points
+    for block_number, path in enumerate(paths, start=1):
+        grid = pv.read(path)
+        try:
+            missing = [name for name in required if name not in grid.cell_data]
+            if missing:
+                raise KeyError(f"{path}: missing cell arrays {missing}")
+            data = grid.cell_data
+            rho = np.asarray(data["rho"], dtype=float).reshape(-1)
+            velocity = np.asarray(data["vel"], dtype=float)
+            xyz = np.asarray(grid.cell_centers().points, dtype=float)
+            _, spacing = block_geometry(grid, path)
+            dx, dy, dz = spacing
+            x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+            radius = np.hypot(x, y)
+            spherical_radius = np.sqrt(x*x + y*y + z*z)
+            softened_radius = np.sqrt(spherical_radius**2 + epsilon_code**2)
 
-    # 速度
-    vel = grid["vel"]
-    vx = vel[:, 0]
-    vy = vel[:, 1]
+            if z_half_width_code is None:
+                dz_overlap = np.full(rho.shape, dz)
+            else:
+                zlo = np.maximum(z - 0.5 * dz, -z_half_width_code)
+                zhi = np.minimum(z + 0.5 * dz, z_half_width_code)
+                dz_overlap = np.maximum(zhi - zlo, 0.0)
 
-    # 座標
-    dx = centers[:, 0] - xc
-    dy = centers[:, 1] - yc
-    dz = centers[:, 2] - zc
+            vphi = np.divide(-y*velocity[:, 0] + x*velocity[:, 1], radius,
+                             out=np.zeros_like(radius), where=radius > 0.0)
+            gR_self = np.divide(x*np.asarray(data["gself_x"]) + y*np.asarray(data["gself_y"]), radius,
+                                out=np.zeros_like(radius), where=radius > 0.0)
+            # gr_starは非softened球半径方向のスカラー値。
+            gR_star = np.asarray(data["gr_star"], dtype=float) * np.divide(
+                radius, spherical_radius, out=np.zeros_like(radius), where=spherical_radius > 0.0)
+            # gr_nfwはsoftened radius方向のスカラー値。
+            gR_nfw = np.asarray(data["gr_nfw"], dtype=float) * np.divide(
+                radius, softened_radius, out=np.zeros_like(radius), where=softened_radius > 0.0)
+            values = (vphi, gR_self, gR_star, gR_nfw)
 
-    r_cyl = np.sqrt(dx*dx + dy*dy)
+            finite = (np.isfinite(rho) & (rho > 0.0) & (radius > 0.0)
+                      & (dz_overlap > 0.0) & np.all(np.isfinite(velocity), axis=1))
+            for value in values:
+                finite &= np.isfinite(value)
+            ibin = np.searchsorted(edges, radius, side="right") - 1
+            use = finite & (ibin >= 0) & (ibin < nbins)
+            if not np.any(use):
+                continue
+            volume = dx * dy * dz_overlap[use]
+            weights = volume * rho[use] if WEIGHT == "mass" else volume
+            bins = ibin[use]
+            denominator += np.bincount(bins, weights=weights, minlength=nbins)
+            counts += np.bincount(bins, minlength=nbins)
+            for key, value in zip(totals, values):
+                totals[key] += np.bincount(bins, weights=weights*value[use], minlength=nbins)
+        finally:
+            del grid
+        if block_number % 128 == 0:
+            gc.collect()
 
-    # midplane抽出
-    midplane = np.abs(dz) < z_cut
+    valid_bin = (denominator > 0.0) & (counts >= MIN_CELLS_PER_BIN)
+    profiles = {key: np.divide(total, denominator, out=np.full(nbins, np.nan), where=valid_bin)
+                for key, total in totals.items()}
+    return profiles, counts, denominator
 
-    # Vphi
-    vphi = (-dy * vx + dx * vy) / np.maximum(r_cyl, 1e-12)
 
-    valid = (
-        np.isfinite(vphi)
-        & (r_cyl > 0)
-        & (r_cyl <= r_max)
-        & midplane
+def circular_speed_from_acceleration(radius_code, radial_acceleration):
+    """内向き加速度のみ実数の円運動速度へ変換する。"""
+    speed_squared = -radius_code * radial_acceleration
+    return np.sqrt(speed_squared, out=np.full_like(speed_squared, np.nan),
+                   where=np.isfinite(speed_squared) & (speed_squared >= 0.0))
+
+
+def save_step(step, time_kyr, edges, profiles, counts, weights, units, z_label):
+    radius_code = np.sqrt(edges[:-1] * edges[1:])
+    radius_au = radius_code * units["length_au"]
+    gR_total = profiles["gR_self"] + profiles["gR_star"] + profiles["gR_nfw"]
+    curves_code = {
+        "self": circular_speed_from_acceleration(radius_code, profiles["gR_self"]),
+        "star": circular_speed_from_acceleration(radius_code, profiles["gR_star"]),
+        "nfw": circular_speed_from_acceleration(radius_code, profiles["gR_nfw"]),
+        "total": circular_speed_from_acceleration(radius_code, gR_total),
+        "gas": profiles["vphi_gas"],
+    }
+    curves = {key: value * units["velocity_kms"] for key, value in curves_code.items()}
+    png = OUTPUT_DIR / f"vphi_profile_{step:05d}.png"
+    csv_path = OUTPUT_DIR / f"vphi_profile_{step:05d}.csv"
+
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    ax.plot(radius_au, curves["self"], lw=1.5, label="Gas self-gravity")
+    ax.plot(radius_au, curves["star"], lw=1.5, label="Central star")
+    ax.plot(radius_au, curves["nfw"], lw=1.5, label="NFW halo")
+    ax.plot(radius_au, curves["total"], color="black", lw=2.2,
+            label="Total gravitational circular speed")
+    ax.plot(radius_au, curves["gas"], color="tab:purple", ls="--", lw=1.7,
+            label=r"Measured gas $\langle v_\phi\rangle$")
+    ax.set_xscale("log")
+    ax.set_xlabel("Cylindrical radius R [AU]")
+    ax.set_ylabel(r"$v_\phi$ [km s$^{-1}$]")
+    ax.set_title(
+        rf"Azimuthal-velocity contributions, step={step:05d}, "
+        rf"$t={time_kyr:.1f}$ kyr" + "\n"
+        + f"{WEIGHT}-weighted, {z_label}"
     )
+    ax.grid(True, which="both", alpha=0.28)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(png, dpi=DPI)
+    if SHOW_IMAGES:
+        plt.show()
+    plt.close(fig)
 
-    r = r_cyl[valid]
-    vphi = vphi[valid]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["radius_AU", "cell_count", "weight_sum_code",
+                         "vphi_self_km_s", "vphi_star_km_s", "vphi_nfw_km_s",
+                         "vphi_total_gravity_km_s", "vphi_gas_mass_weighted_km_s",
+                         "gR_self_code", "gR_star_code", "gR_nfw_code", "gR_total_code"])
+        for i in range(radius_au.size):
+            writer.writerow([f"{radius_au[i]:.10e}", int(counts[i]), f"{weights[i]:.10e}",
+                             f"{curves['self'][i]:.10e}", f"{curves['star'][i]:.10e}",
+                             f"{curves['nfw'][i]:.10e}", f"{curves['total'][i]:.10e}",
+                             f"{curves['gas'][i]:.10e}", f"{profiles['gR_self'][i]:.10e}",
+                             f"{profiles['gR_star'][i]:.10e}", f"{profiles['gR_nfw'][i]:.10e}",
+                             f"{gR_total[i]:.10e}"])
+    return png, csv_path
 
-    # ======================================
-    # ビン平均
-    # ======================================
-    prof = np.zeros(n_bins)
 
-    bin_index = np.digitize(r, bin_edges) - 1
+def main():
+    if not DATADIR.is_dir():
+        raise FileNotFoundError(DATADIR)
+    if WEIGHT not in ("mass", "volume") or N_RADIAL_BINS < 2:
+        raise ValueError("Invalid WEIGHT or N_RADIAL_BINS")
+    metadata = load_metadata(DATADIR)
+    unit_data = metadata["units"]
+    length_au = float(unit_data["length_cgs"]) / AU_CGS
+    units = {"length_au": length_au,
+             "velocity_kms": float(unit_data["velocity_cgs"]) / 1.0e5,
+             "time_cgs": float(unit_data["time_cgs"])}
+    epsilon_code = float(metadata["gravity"]["softening_code"])
+    mesh = metadata["mesh"]
+    full_bounds = np.array([[mesh["x1min_code"], mesh["x1max_code"]],
+                            [mesh["x2min_code"], mesh["x2max_code"]],
+                            [mesh["x3min_code"], mesh["x3max_code"]]], dtype=float)
+    z_half_width_code = None if Z_HALF_WIDTH_AU is None else float(Z_HALF_WIDTH_AU)/length_au
+    z_label = "full z domain" if Z_HALF_WIDTH_AU is None else rf"$|z|\leq {Z_HALF_WIDTH_AU:g}$ AU"
+    groups = collect_steps()
+    if SKIP_FIRST_SNAPSHOT:
+        first_step = next(iter(groups))
+        print(
+            f"[INFO] Skip     : first snapshot step={first_step:05d} "
+            "(gravity diagnostics may be uninitialized)"
+        )
+        groups = dict(list(groups.items())[1:])
+        if not groups:
+            raise RuntimeError(
+                "No VTK snapshots remain after SKIP_FIRST_SNAPSHOT=True"
+            )
+    edges = make_radial_edges(next(iter(groups.values())), full_bounds, length_au)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[INFO] Metadata : {metadata['_path']}")
+    print(f"[INFO] Input    : {DATADIR}")
+    print(f"[INFO] Output   : {OUTPUT_DIR}")
+    print(f"[INFO] Steps    : {len(groups)}")
+    print(f"[INFO] z range  : {z_label}")
 
-    for i in range(n_bins):
-        mask = bin_index == i
+    for number, (step, paths) in enumerate(groups.items(), start=1):
+        time_code = read_vtk_time(paths[0])
+        time_kyr = time_code * units["time_cgs"] / KYR_CGS
+        print(f"[RUN {number:3d}/{len(groups):3d}] step={step:05d}, t={time_kyr:.1f} kyr, blocks={len(paths)}")
+        profiles, counts, weights = accumulate_step(paths, edges, z_half_width_code, epsilon_code)
+        if not np.any(np.isfinite(profiles["gR_self"])):
+            warnings.warn(f"step={step:05d}: no valid gravity profile")
+        png, csv_path = save_step(step, time_kyr, edges, profiles, counts, weights, units, z_label)
+        print(f"      [SAVED] {png.name}, {csv_path.name}")
+        del profiles, counts, weights
+        gc.collect()
+    print(f"[DONE] {OUTPUT_DIR}")
 
-        if np.any(mask):
-            prof[i] = vphi[mask].mean()
-        else:
-            prof[i] = np.nan
 
-    # ======================================
-    # 理論
-    # ======================================
-    theory = theoretical_vphi(bin_centers)
-
-    # ======================================
-    # ① LOGプロット
-    # ======================================
-    plt.figure(figsize=(6,4))
-
-    plt.plot(bin_centers, prof, lw=1.5, label="Simulation")
-    plt.plot(bin_centers, theory, "--", lw=1.2,
-             label=r"Theory (gas-only 0.5 $v_{\rm kep}$)")
-
-    plt.xscale("log")
-    plt.yscale("log")
-
-    plt.xlabel("r (×100 AU)")
-    plt.ylabel(r"$v_\phi$")
-    plt.title(f"Rotation profile LOG (step {step})")
-
-    plt.grid(True, which="both", ls="--", alpha=0.5)
-    plt.legend()
-
-    png = os.path.join(output_dir_log, f"vphi_log_{step}.png")
-    plt.savefig(png, dpi=150, bbox_inches="tight")
-    plt.close()
-
-    # ======================================
-    # ② LINEARプロット
-    # ======================================
-    plt.figure(figsize=(6,4))
-
-    plt.plot(bin_centers, prof, lw=1.5, label="Simulation")
-    plt.plot(bin_centers, theory, "--", lw=1.2,
-             label=r"Theory (gas-only 0.5 $v_{\rm kep}$)")
-
-    plt.xscale("linear")
-    plt.yscale("linear")
-
-    plt.xlabel("r (×100 AU)")
-    plt.ylabel(r"$v_\phi$")
-    plt.title(f"Rotation profile LINEAR (step {step})")
-
-    plt.grid(True, ls="--", alpha=0.5)
-    plt.legend()
-
-    png = os.path.join(output_dir_lin, f"vphi_linear_{step}.png")
-    plt.savefig(png, dpi=150, bbox_inches="tight")
-    plt.close()
-
-print("Done.")
+if __name__ == "__main__":
+    main()
