@@ -50,6 +50,7 @@ void CentralGravity(MeshBlock *pmb, const Real time, const Real dt,
                     AthenaArray<Real> &cons_scalar);
 
 Real StarMassHistory(MeshBlock *pmb, int iout);
+Real SphereHistory(MeshBlock *pmb, int iout);
 
 namespace {
 // with functions A1,2,3 which compute vector potentials
@@ -103,7 +104,69 @@ const Real Phi0_phys = 1.02e13;   // cm^2 s^-2
 const Real Rs_phys   = 5.71e20;   // cm
 
 //===== Toyouchi+23 parameters =====
-Real epsilon_soft = 0.5;   // gravitational softening
+Real epsilon_soft = 0.0;   // 2 * finest uniform SMR cell width
+Real finest_dx = 0.0, racc = 0.0;
+const int sphere_samples = 4096;
+// Positive inward and outward rates, integrated on the actual spherical surface.
+void SphereFlux(MeshBlock *pmb, Real &inflow, Real &outflow) {
+  inflow = outflow = 0.0;
+  const RegionSize &domain = pmb->pmy_mesh->mesh_size;
+  const Real center[3] = {0.5*(domain.x1min+domain.x1max),
+                         0.5*(domain.x2min+domain.x2max),
+                         0.5*(domain.x3min+domain.x3max)};
+  Coordinates *c = pmb->pcoord;
+  const Real lo[3] = {c->x1f(pmb->is), c->x2f(pmb->js), c->x3f(pmb->ks)};
+  const Real hi[3] = {c->x1f(pmb->ie+1), c->x2f(pmb->je+1), c->x3f(pmb->ke+1)};
+  for (int d=0; d<3; ++d)
+    if (hi[d] <= center[d]-racc || lo[d] >= center[d]+racc) return;
+  const Real area = 4.0*M_PI*racc*racc/sphere_samples;
+  const Real golden_angle = M_PI*(3.0-std::sqrt(5.0));
+  for (int n=0; n<sphere_samples; ++n) {
+    const Real nz = 1.0-2.0*(n+0.5)/sphere_samples;
+    const Real q = std::sqrt(1.0-nz*nz);
+    const Real normal[3] = {q*std::cos(n*golden_angle), q*std::sin(n*golden_angle), nz};
+    Real x[3];
+    bool owned = true;
+    for (int d=0; d<3; ++d) {
+      x[d] = center[d]+racc*normal[d];
+      owned = owned && x[d]>=lo[d] && x[d]<hi[d];
+    }
+    if (!owned) continue;  // half-open blocks: no duplicated surface points
+    int i=pmb->is, j=pmb->js, k=pmb->ks;
+    while (i<pmb->ie && x[0]>=c->x1f(i+1)) ++i;
+    while (j<pmb->je && x[1]>=c->x2f(j+1)) ++j;
+    while (k<pmb->ke && x[2]>=c->x3f(k+1)) ++k;
+    const Real local_dx=std::min(c->dx1f(i),std::min(c->dx2f(j),c->dx3f(k)));
+    if (std::abs(local_dx-finest_dx)>1.0e-8*finest_dx) {
+      std::stringstream msg;
+      msg << "Virtual sphere must be covered by the finest SMR level.";
+      ATHENA_ERROR(msg);
+    }
+    // Interpolate radial mass-flux density, not Cartesian velocity: a purely
+    // tangential cell velocity must not generate spurious inflow/outflow.
+    if (x[0]<c->x1v(i)) --i;
+    if (x[1]<c->x2v(j)) --j;
+    if (x[2]<c->x3v(k)) --k;
+    const Real t[3]={(x[0]-c->x1v(i))/(c->x1v(i+1)-c->x1v(i)),
+                     (x[1]-c->x2v(j))/(c->x2v(j+1)-c->x2v(j)),
+                     (x[2]-c->x3v(k))/(c->x3v(k+1)-c->x3v(k))};
+    Real radial_flux=0.0;
+    for (int dk=0; dk<2; ++dk) for (int dj=0; dj<2; ++dj) for (int di=0; di<2; ++di) {
+      const Real rx=c->x1v(i+di)-center[0];
+      const Real ry=c->x2v(j+dj)-center[1];
+      const Real rz=c->x3v(k+dk)-center[2];
+      const Real radius=std::sqrt(rx*rx+ry*ry+rz*rz);
+      const Real weight=(di?t[0]:1-t[0])*(dj?t[1]:1-t[1])*(dk?t[2]:1-t[2]);
+      if (radius>0.0)
+        radial_flux+=weight*(pmb->phydro->u(IM1,k+dk,j+dj,i+di)*rx
+                            +pmb->phydro->u(IM2,k+dk,j+dj,i+di)*ry
+                            +pmb->phydro->u(IM3,k+dk,j+dj,i+di)*rz)/radius;
+    }
+    const Real flux=area*radial_flux;
+    inflow += std::max(-flux, static_cast<Real>(0));
+    outflow += std::max(flux, static_cast<Real>(0));
+  }
+}
 
 // ===== unit system (code unit <-> cgs) =====
 const Real Msun = 1.98847e33;       // g
@@ -195,6 +258,17 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "    \"mstar_msun\": " << mstar_fixed*Munit/Msun << ",\n"
       << "    \"softening_au\": " << epsilon_au << ",\n"
       << "    \"softening_code\": " << epsilon_soft << "\n"
+      << "  },\n"
+      << "  \"virtual_sphere\": {\n"
+      << "    \"radius_au\": " << racc*Lunit/AU << ",\n"
+      << "    \"dxmin_au\": " << finest_dx*Lunit/AU << ",\n"
+      << "    \"surface_samples\": " << sphere_samples << ",\n"
+      << "    \"gas_removed\": false,\n"
+      << "    \"gravity_mass_updated\": false,\n"
+      << "    \"history_units\": \"code mass and code mass/code time\",\n"
+      << "    \"mass_definition\": \"Mstar_init + integral(Mdot_in-Mdot_out)dt\",\n"
+      << "    \"quadrature\": \"equal-area Fibonacci sphere, trilinear radial momentum\",\n"
+      << "    \"time_integration\": \"trapezoidal; first interval right endpoint\"\n"
       << "  },\n"
       << "  \"initial_conditions\": {\n"
       << "    \"rotation_enabled\": " << JsonBool(use_rotation) << ",\n"
@@ -379,23 +453,51 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   gconst = punit->grav_const_code;
 
   const Real sound_speed_kms = pin->GetReal("hydro", "sound_speed_kms");
-  const Real epsilon_au = pin->GetReal("problem", "epsilon_au");
-  if (!(std::isfinite(sound_speed_kms) && sound_speed_kms > 0.0
-        && std::isfinite(epsilon_au) && epsilon_au >= 0.0)) {
+  if (!(std::isfinite(sound_speed_kms) && sound_speed_kms > 0.0)) {
     std::stringstream msg;
-    msg << "sound_speed_kms must be finite and positive; "
-           "epsilon_au must be finite and non-negative.";
+    msg << "sound_speed_kms must be finite and positive.";
     ATHENA_ERROR(msg);
   }
-  // EOS constructors and ProblemGenerator read this code-unit value later.
-  pin->SetReal("hydro", "iso_sound_speed", sound_speed_kms * 1.0e5 / Vunit);
-  epsilon_soft = epsilon_au * AU / Lunit;
+  if (adaptive || std::string(COORDINATE_SYSTEM) != "cartesian"
+      || mesh_size.nx2 <= 1 || mesh_size.nx3 <= 1
+      || mesh_size.x1rat != 1.0 || mesh_size.x2rat != 1.0 || mesh_size.x3rat != 1.0) {
+    std::stringstream msg;
+    msg << "Toyouchi automatic softening requires uniform 3D Cartesian SMR.";
+    ATHENA_ERROR(msg);
+  }
+  int finest_level = 0;
+  if (multilevel) {
+    for (InputBlock *block=pin->pfirst_block; block; block=block->pnext)
+      if (block->block_name.compare(0,10,"refinement")==0)
+        finest_level=std::max(finest_level,pin->GetInteger(block->block_name,"level"));
+  }
+  const Real dx1=(mesh_size.x1max-mesh_size.x1min)/mesh_size.nx1;
+  const Real dx2=(mesh_size.x2max-mesh_size.x2min)/mesh_size.nx2;
+  const Real dx3=(mesh_size.x3max-mesh_size.x3min)/mesh_size.nx3;
+  finest_dx=std::ldexp(std::min(dx1,std::min(dx2,dx3)),-finest_level);
+  epsilon_soft=racc=2.0*finest_dx;
+  if (racc >= 0.5*std::min(mesh_size.x1max-mesh_size.x1min,
+                 std::min(mesh_size.x2max-mesh_size.x2min,mesh_size.x3max-mesh_size.x3min))) {
+    std::stringstream msg;
+    msg << "Virtual sphere must fit strictly inside the domain.";
+    ATHENA_ERROR(msg);
+  }
+  // Ignore legacy epsilon/racc inputs; record the derived values in restart headers.
+  pin->SetReal("problem", "epsilon_au", epsilon_soft*Lunit/AU);
+  pin->SetReal("problem", "racc_au", racc*Lunit/AU);
+  pin->SetReal("hydro", "iso_sound_speed", sound_speed_kms*1.0e5/Vunit);
+  // Restart-persistent signed transported mass, previous net rate, validity flag.
+  AllocateRealUserMeshDataField(1);
+  ruser_mesh_data[0].NewAthenaArray(3);
+  ruser_mesh_data[0].ZeroClear();
 
   if (Globals::my_rank == 0) {
     punit->PrintCodeUnits();
     std::cout << "Toyouchi converted parameters: G=" << gconst
               << " iso_sound_speed=" << sound_speed_kms * 1.0e5 / Vunit
-              << " epsilon=" << epsilon_soft << std::endl;
+              << " dxmin=" << finest_dx*Lunit/AU << " AU"
+              << " epsilon=" << epsilon_soft*Lunit/AU << " AU"
+              << " racc=" << racc*Lunit/AU << " AU" << std::endl;
   }
 
 
@@ -434,8 +536,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     ATHENA_ERROR(msg);
   }
   InitProfiles();
-  AllocateUserHistoryOutput(1);
-  EnrollUserHistoryOutput(0, StarMassHistory, "Mstar");
+  AllocateUserHistoryOutput(5);
+  EnrollUserHistoryOutput(0, StarMassHistory, "Mstar_fixed");
+  EnrollUserHistoryOutput(1, SphereHistory, "Mdot_in");
+  EnrollUserHistoryOutput(2, SphereHistory, "Mdot_out");
+  EnrollUserHistoryOutput(3, SphereHistory, "Mdot_net");
+  EnrollUserHistoryOutput(4, SphereHistory, "Mstar_diag");
   if (Globals::my_rank == 0) {
     std::cout << "Fixed stellar mass=" << mstar_fixed
               << " code mass; Wise19 core radius=" << fit_rmin_au
@@ -761,7 +867,7 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
   // one-time write even though the callback runs once per local MeshBlock.
   WriteToyouchiMetadata(pmy_mesh, pin,
                         pin->GetReal("hydro", "sound_speed_kms"),
-                        pin->GetReal("problem", "epsilon_au"));
+                        epsilon_soft*Lunit/AU);
 
   AthenaArray<Real> &w = phydro->w;
   Coordinates *coord = pcoord;
@@ -845,4 +951,39 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
 // History sums over blocks; report the fixed global mass only once.
 Real StarMassHistory(MeshBlock *pmb, int iout) {
   return pmb->gid == 0 ? mstar_fixed : 0.0;
+}
+
+// HST uses code units and sums callbacks over all blocks/ranks.
+Real SphereHistory(MeshBlock *pmb, int iout) {
+  if (iout == 4)
+    return pmb->gid == 0 ? mstar_fixed+pmb->pmy_mesh->ruser_mesh_data[0](0) : 0.0;
+  Real in, out;
+  SphereFlux(pmb, in, out);
+  return iout == 1 ? in : (iout == 2 ? out : in-out);
+}
+
+void Mesh::UserWorkInLoop() {
+  Real rates[2] = {0.0,0.0};
+  for (int b=0; b<nblocal; ++b) {
+    Real in, out;
+    SphereFlux(my_blocks(b), in, out);
+    rates[0]+=in; rates[1]+=out;
+  }
+#ifdef MPI_PARALLEL
+  MPI_Allreduce(MPI_IN_PLACE, rates, 2, MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
+#endif
+  const Real net=rates[0]-rates[1];
+  AthenaArray<Real> &state=ruser_mesh_data[0];
+  state(0)+=dt*(state(2)>0.5 ? 0.5*(state(1)+net) : net);
+  state(1)=net;
+  state(2)=1.0;
+  if (Globals::my_rank==0 && (ncycle_out>0 && (ncycle+1)%ncycle_out==0)) {
+    const Real rate_unit=Munit/Msun/(Tunit/31557600.0);
+    std::cout << "VirtualSphere: time=" << (time+dt)*Tunit/31557600.0
+              << " yr Mdot_in=" << rates[0]*rate_unit
+              << " Mdot_out=" << rates[1]*rate_unit
+              << " Mdot_net=" << net*rate_unit << " Msun/yr"
+              << " Mstar_diag=" << (mstar_fixed+state(0))*Munit/Msun
+              << " Msun (gravity fixed)" << std::endl;
+  }
 }
