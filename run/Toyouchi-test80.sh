@@ -6,6 +6,7 @@ set -Eeuo pipefail
 # 音速を5e3K、中心星質量を100M☀に変更して定常円盤ができるかテスト
 # 今回からM0=1M☀に変更した
 # 20kyrの短時間テスト用
+# 磁場はOFF
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ATHENA="${ATHENA_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
