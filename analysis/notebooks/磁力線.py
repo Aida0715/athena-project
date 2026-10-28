@@ -75,6 +75,9 @@ stream_density = 1.5
 # Falseの場合はBx・Bzの格子補間とstreamplotも実行しない。
 draw_fieldlines_xz = True
 
+# True: metadataのracc球に相当する中心円内の密度だけを白抜きにする
+mask_racc_xz = True
+
 # x-z面の法線（y方向）に平均する半厚み。
 # 2.0なら中心面の上下それぞれ約2セル、合計約4セル厚を平均する。
 slice_half_thickness_cells = 2.0
@@ -114,6 +117,9 @@ Bunit = np.sqrt(4.0 * np.pi * Punit)
 
 AU = 1.495978707e13
 YEAR = 365.25 * 24.0 * 3600.0
+RACC_AU = float(metadata["virtual_sphere"]["radius_au"]) if mask_racc_xz else 0.0
+BZ0_MICROGAUSS = float(metadata["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 print("\n=== Code units ===")
 print(f"Lunit   = {Lunit:.6e} cm")
@@ -821,7 +827,11 @@ def plot_xz_density_with_fieldlines(
         Bproj_grid = None
         has_projected_field = False
 
-    rho_grid_plot = rho_grid
+    rho_grid_plot = np.ma.masked_invalid(rho_grid)
+    if mask_racc_xz:
+        rho_grid_plot = np.ma.masked_where(
+            X*X + Z*Z < RACC_AU**2, rho_grid_plot
+        )
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")
@@ -954,7 +964,7 @@ def plot_xz_density_with_fieldlines(
         f"{xz_title}\n"
         f"step={step:05d}, "
         f"t={time_kyr:.1f} kyr"
-        f"{zoom_title}"
+        f"{zoom_title}, {BZ0_LABEL}"
     )
 
     ax.set_xlim(xmin, xmax)
@@ -1248,6 +1258,9 @@ stream_density = 1.5
 # Falseの場合はBx・ByのDelaunay補間とstreamplotも実行しない。
 draw_fieldlines_xy = True
 
+# True: metadataのracc球に相当する中心円内の密度だけを白抜きにする
+mask_racc_xy = True
+
 # x-y面の法線（z方向）に平均する共通の半厚み [AU]。
 # AMRレベルによらず、全MeshBlockで同じ物理厚みを使う。
 slice_half_thickness_au = 1000.0
@@ -1301,6 +1314,9 @@ Bunit = np.sqrt(4.0 * np.pi * Punit)
 
 AU = 1.496e13
 YEAR = 3.15576e7
+RACC_AU = float(metadata["virtual_sphere"]["radius_au"]) if mask_racc_xy else 0.0
+BZ0_MICROGAUSS = float(metadata["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 print("\n=== Code units ===")
 print(f"Lunit   = {Lunit:.6e} cm")
@@ -2092,7 +2108,11 @@ def plot_xy_density_with_fieldlines(
         By_direction = None
         has_projected_field = False
 
-    rho_grid_plot = rho_grid
+    rho_grid_plot = np.ma.masked_invalid(rho_grid)
+    if mask_racc_xy:
+        rho_grid_plot = np.ma.masked_where(
+            X*X + Y*Y < RACC_AU**2, rho_grid_plot
+        )
 
     density_cmap = plt.get_cmap("YlGnBu").copy()
     density_cmap.set_bad("white")
@@ -2214,7 +2234,7 @@ def plot_xy_density_with_fieldlines(
     ax.set_title(
         f"{xy_title}\n"
         f"step={step:05d}, "
-        f"t={time_kyr:.1f} kyr"
+        f"t={time_kyr:.1f} kyr, {BZ0_LABEL}"
     )
 
     ax.set_xlim(

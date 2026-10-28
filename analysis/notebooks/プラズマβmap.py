@@ -63,6 +63,9 @@ BETA_VMAX = None
 # カラーマップ：低β=濃紫、高β=黄
 BETA_CMAP = "plasma"
 
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+
 # 補間後の画像解像度
 MAP_N = 700
 
@@ -99,6 +102,9 @@ YEAR_CGS = 365.25 * 24.0 * 3600.0
 
 LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 TIME_UNIT_MYR = T_UNIT_CGS / YEAR_CGS / 1.0e6
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 print("=== Plasma-beta x-z maps ===")
 print(f"Input          : {vtk_dir}")
@@ -455,6 +461,10 @@ def plot_beta_map(data, zoom_fraction, output_dir, suffix):
         log_beta_grid = np.where(np.isfinite(log_beta_grid), log_beta_grid, nearest)
 
     beta_grid = 10.0**log_beta_grid
+    if MASK_RACC:
+        beta_grid = np.ma.masked_where(
+            X*X + Z*Z < RACC_AU**2, beta_grid
+        )
 
     fig, ax = plt.subplots(figsize=FIGSIZE)
     image = ax.pcolormesh(
@@ -487,7 +497,7 @@ def plot_beta_map(data, zoom_fraction, output_dir, suffix):
 
     ax.set_title(
         r"Plasma $\beta$ on the x-z plane" + "\n"
-        f"step={step:05d}, t={time_myr:.6e} Myr, {range_name}"
+        f"step={step:05d}, t={time_myr:.6e} Myr, {range_name}, {BZ0_LABEL}"
     )
 
     ax.text(
@@ -623,6 +633,9 @@ BETA_VMAX = None
 # カラーマップ：低β=濃紫、高β=黄
 BETA_CMAP = "plasma"
 
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+
 # 投影磁力線の表示設定
 STREAM_DENSITY = 1.1
 STREAM_LINEWIDTH = 0.45
@@ -664,6 +677,9 @@ YEAR_CGS = 365.25 * 24.0 * 3600.0
 
 LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 TIME_UNIT_MYR = T_UNIT_CGS / YEAR_CGS / 1.0e6
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 print("=== Plasma-beta x-z maps ===")
 print(f"Input          : {vtk_dir}")
@@ -1050,6 +1066,11 @@ def plot_beta_map(data, zoom_fraction, output_dir, suffix):
         and np.max(finite_Bproj) > 0.0
     )
 
+    if MASK_RACC:
+        beta_grid = np.ma.masked_where(
+            X*X + Z*Z < RACC_AU**2, beta_grid
+        )
+
     fig, ax = plt.subplots(figsize=FIGSIZE)
     image = ax.pcolormesh(
         X,
@@ -1110,7 +1131,7 @@ def plot_beta_map(data, zoom_fraction, output_dir, suffix):
 
     ax.set_title(
         r"Plasma $\beta$ and projected magnetic field lines" + "\n"
-        f"step={step:05d}, t={time_myr:.6e} Myr, {range_name}"
+        f"step={step:05d}, t={time_myr:.6e} Myr, {range_name}, {BZ0_LABEL}"
     )
 
     ax.text(

@@ -73,6 +73,12 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 
 
 # -------------------------- 描画設定 --------------------------
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800
 
@@ -263,6 +269,10 @@ def plot_and_save(
     step, time_kyr, source_cells, label, output_path,
 ):
     density_plot = np.ma.masked_invalid(density_map)
+    if MASK_RACC:
+        density_plot = np.ma.masked_where(
+            X*X + Z*Z < RACC_AU**2, density_plot
+        )
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -304,7 +314,7 @@ def plot_and_save(
     }[label]
     ax.set_title(
         "Density map on the x-z midplane\n"
-        f"step={step:05d}, t={time_text} kyr, {title_suffix}",
+        f"step={step:05d}, t={time_text} kyr, {title_suffix}, {BZ0_LABEL}",
         fontsize=14,
     )
 
@@ -516,6 +526,12 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 
 
 # -------------------------- 描画設定 --------------------------
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800
 
@@ -706,6 +722,10 @@ def plot_and_save(
     step, time_kyr, source_cells, label, output_path,
 ):
     density_plot = np.ma.masked_invalid(density_map)
+    if MASK_RACC:
+        density_plot = np.ma.masked_where(
+            X*X + Y*Y < RACC_AU**2, density_plot
+        )
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -747,7 +767,7 @@ def plot_and_save(
     }[label]
     ax.set_title(
         "Density map on the x-y midplane\n"
-        f"step={step:05d}, t={time_text} kyr, {title_suffix}",
+        f"step={step:05d}, t={time_text} kyr, {title_suffix}, {BZ0_LABEL}",
         fontsize=14,
     )
 
@@ -964,6 +984,12 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 
 
 # -------------------------- 描画設定 --------------------------
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800
 
@@ -1212,6 +1238,10 @@ def plot_and_save(
     label, output_path,
 ):
     density_plot = np.ma.masked_invalid(density_map)
+    if MASK_RACC:
+        density_plot = np.ma.masked_where(
+            X*X + Y*Y < RACC_AU**2, density_plot
+        )
 
     cmap = copy.copy(plt.get_cmap(cmap_name))
     cmap.set_bad("white")
@@ -1283,7 +1313,7 @@ def plot_and_save(
     }[label]
     ax.set_title(
         "Density map with actual cell grid on the x-y midplane\n"
-        f"step={step:05d}, t={time_text} kyr, {title_suffix}",
+        f"step={step:05d}, t={time_text} kyr, {title_suffix}, {BZ0_LABEL}",
         fontsize=14,
     )
 

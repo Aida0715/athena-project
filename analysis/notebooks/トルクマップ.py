@@ -138,6 +138,12 @@ print(
 # 物理・描画設定
 # ============================================================
 
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+
 # 表示範囲：-10^5 ～ +10^5 AU
 PLOT_RADIUS_AU = 1.0e5
 
@@ -1321,15 +1327,28 @@ for frame_index, snapshot in enumerate(
         axes,
         panel_definitions,
     ):
+        central_mask = (
+            X_AU*X_AU + Y_AU*Y_AU < RACC_AU**2
+            if MASK_RACC else np.zeros_like(X_AU, dtype=bool)
+        )
+        rho_panel = np.ma.masked_where(
+            central_mask,
+            np.clip(rho_display, rho_vmin, rho_vmax),
+        )
+        torque_panel = np.ma.masked_where(
+            central_mask,
+            np.clip(
+                diagnostic[diagnostic_key],
+                -diagnostic_limits[diagnostic_key],
+                diagnostic_limits[diagnostic_key],
+            ),
+        )
+
         # 白黒密度背景
         ax.pcolormesh(
             X_AU,
             Y_AU,
-            np.clip(
-                rho_display,
-                rho_vmin,
-                rho_vmax,
-            ),
+            rho_panel,
             shading="auto",
             cmap=DENSITY_CMAP,
             norm=density_norm,
@@ -1357,11 +1376,7 @@ for frame_index, snapshot in enumerate(
         torque_image = ax.pcolormesh(
             X_AU,
             Y_AU,
-            np.clip(
-                diagnostic[diagnostic_key],
-                -torque_limit,
-                torque_limit,
-            ),
+            torque_panel,
             shading="auto",
             cmap=TORQUE_CMAP,
             norm=torque_norm,
@@ -1470,7 +1485,7 @@ for frame_index, snapshot in enumerate(
         "Density, velocity direction, "
         "and angular-momentum transport\n"
         f"step={snapshot['step']:05d}, "
-        f"t={snapshot['time_myr']:.6e} Myr",
+        f"t={snapshot['time_myr']:.6e} Myr, {BZ0_LABEL}",
         fontsize=16,
     )
 

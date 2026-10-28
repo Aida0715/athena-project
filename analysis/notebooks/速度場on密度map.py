@@ -115,6 +115,12 @@ print(
 # 3. 描画設定
 # ============================================================
 
+# True: metadataのracc球に相当する中心円内の密度を白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+
 # 補間画像の一辺のピクセル数
 MAP_RESOLUTION = 500
 
@@ -1223,6 +1229,11 @@ for frame_index, step_info in enumerate(
         rho_masked = np.ma.masked_invalid(
             rho_map
         )
+        if MASK_RACC:
+            rho_masked = np.ma.masked_where(
+                X_map_au*X_map_au + Z_map_au*Z_map_au < RACC_AU**2,
+                rho_masked,
+            )
 
         ax.pcolormesh(
             X_map_plot,
@@ -1311,7 +1322,7 @@ for frame_index, step_info in enumerate(
             r"$(v_x,v_z)$ direction"
             "\n"
             f"step={snapshot['step']:05d}, "
-            f"t={snapshot['time_kyr_integer']} kyr",
+            f"t={snapshot['time_kyr_integer']} kyr, {BZ0_LABEL}",
             fontsize=14,
         )
 
@@ -1528,6 +1539,12 @@ print(
 # ============================================================
 # 3. 解析・描画設定
 # ============================================================
+
+# True: metadataのracc球に相当する中心円内の密度を白抜きにする
+MASK_RACC = True
+RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 # 補間画像の解像度
 MAP_RESOLUTION = 700
@@ -2688,6 +2705,11 @@ for frame_index, step_info in enumerate(
         rho_masked = np.ma.masked_invalid(
             rho_map
         )
+        if MASK_RACC:
+            rho_masked = np.ma.masked_where(
+                X_map_au*X_map_au + Y_map_au*Y_map_au < RACC_AU**2,
+                rho_masked,
+            )
 
         ax.pcolormesh(
             X_map_plot,
@@ -2771,7 +2793,7 @@ for frame_index, step_info in enumerate(
             r"$(v_x,v_y)$ direction"
             "\n"
             f"step={snapshot['step']:05d}, "
-            f"t={snapshot['time_kyr_integer']} kyr",
+            f"t={snapshot['time_kyr_integer']} kyr, {BZ0_LABEL}",
             fontsize=14,
         )
 

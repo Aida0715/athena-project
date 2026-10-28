@@ -36,6 +36,9 @@ DATADIR = Path("~/athena-project/results/〇〇").expanduser().resolve()
 VTK_GLOB = "Toyouchi.block*.out2.*.vtk"
 STEPS = None                    # None: 全時刻、例: [0, 25, 50, 100]
 
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+
 # 共通親ディレクトリ。この下に出力種類別ディレクトリを作る。
 OUTPUT_ROOT = DATADIR / "toomre_Q_analysis"
 
@@ -130,6 +133,12 @@ EPSILON_CODE = float(METADATA["gravity"]["softening_code"])
 MSTAR_CODE = float(METADATA["gravity"]["mstar_code"])
 CENTRAL_GRAVITY = bool(METADATA["gravity"]["central_enabled"])
 Z_HALF_WIDTH_CODE = Z_HALF_WIDTH_AU / LENGTH_AU
+RACC_AU = (
+    float(METADATA["virtual_sphere"]["radius_au"])
+    if MASK_RACC else 0.0
+)
+BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
 mesh_meta = METADATA["mesh"]
 FULL_BOUNDS = np.array([
@@ -490,6 +499,11 @@ def save_table(step, time_kyr, result):
 
 def draw_sigma(ax, result):
     sigma_msun_au2 = result["sigma_map"] * SIGMA_UNIT_MSUN_AU2
+    if MASK_RACC:
+        x = 0.5 * (result["x_edges"][:-1] + result["x_edges"][1:]) * LENGTH_AU
+        y = 0.5 * (result["y_edges"][:-1] + result["y_edges"][1:]) * LENGTH_AU
+        xx, yy = np.meshgrid(x, y)
+        sigma_msun_au2 = np.where(xx*xx + yy*yy < RACC_AU**2, np.nan, sigma_msun_au2)
     positive = sigma_msun_au2[
         np.isfinite(sigma_msun_au2) & (sigma_msun_au2 > 0.0)
     ]
@@ -507,7 +521,13 @@ def draw_sigma(ax, result):
 
 
 def draw_q(ax, result):
-    log_q = np.log10(result["q_map"])
+    q_map = result["q_map"]
+    if MASK_RACC:
+        x = 0.5 * (result["x_edges"][:-1] + result["x_edges"][1:]) * LENGTH_AU
+        y = 0.5 * (result["y_edges"][:-1] + result["y_edges"][1:]) * LENGTH_AU
+        xx, yy = np.meshgrid(x, y)
+        q_map = np.where(xx*xx + yy*yy < RACC_AU**2, np.nan, q_map)
+    log_q = np.log10(q_map)
     image = ax.imshow(
         log_q, origin="lower", extent=axis_extent_au(result), cmap="RdBu",
         # log10(Q)=0、すなわちQ=1を発散色の白い中心に固定する。
@@ -517,7 +537,7 @@ def draw_q(ax, result):
         ),
         interpolation=MAP_INTERPOLATION, aspect="equal",
     )
-    finite = result["q_map"][np.isfinite(result["q_map"])]
+    finite = q_map[np.isfinite(q_map)]
     if (
         DRAW_Q1_CONTOUR and finite.size
         and finite.min() <= 1.0 <= finite.max()
@@ -530,7 +550,7 @@ def draw_q(ax, result):
             0.5 * (result["y_edges"][:-1] + result["y_edges"][1:])
             * LENGTH_AU / MAP_AXIS_SCALE_AU
         )
-        ax.contour(x, y, result["q_map"], levels=[1.0], colors="black", linewidths=1.0)
+        ax.contour(x, y, q_map, levels=[1.0], colors="black", linewidths=1.0)
     return image
 
 
@@ -559,7 +579,7 @@ def plot_outputs(step, time_kyr, result):
 
     fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
     image = draw_sigma(ax, result); format_map_axis(ax, result)
-    ax.set_title(rf"Surface density, $t={time_kyr:.1f}$ kyr, $|z|\leq{Z_HALF_WIDTH_AU:g}$ AU")
+    ax.set_title(rf"Surface density, $t={time_kyr:.1f}$ kyr, $|z|\leq{Z_HALF_WIDTH_AU:g}$ AU, {BZ0_LABEL}")
     fig.colorbar(
         image, ax=ax,
         label=r"$\Sigma$ [$M_\odot\,{\rm AU}^{-2}$]",
@@ -571,7 +591,7 @@ def plot_outputs(step, time_kyr, result):
     fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
     image = draw_q(ax, result); format_map_axis(ax, result)
     contour_note = "; black: $Q=1$" if DRAW_Q1_CONTOUR else ""
-    ax.set_title(rf"Toomre $Q$, $t={time_kyr:.1f}$ kyr{contour_note}")
+    ax.set_title(rf"Toomre $Q$, $t={time_kyr:.1f}$ kyr, {BZ0_LABEL}{contour_note}")
     cbar = fig.colorbar(image, ax=ax, label=r"Toomre $Q$")
     ticks = np.array([0.1, 0.3, 1.0, 3.0, 10.0])
     cbar.set_ticks(np.log10(ticks)); cbar.set_ticklabels([f"{v:g}" for v in ticks])
@@ -592,7 +612,7 @@ def plot_outputs(step, time_kyr, result):
     axes[1].axhline(1.0, color="black", ls="--", lw=1.0)
     axes[1].set(xlabel="R [AU]", ylabel="Annular Toomre Q")
     axes[1].grid(alpha=0.25, which="both")
-    fig.suptitle(f"Rotation diagnostics: step={step:05d}, t={time_kyr:.1f} kyr")
+    fig.suptitle(f"Rotation diagnostics: step={step:05d}, t={time_kyr:.1f} kyr, {BZ0_LABEL}")
     fig.tight_layout(); fig.savefig(OUTPUT_DIRS["rotation"] / f"rotation_Q_{suffix}.png", dpi=DPI)
     if SHOW_IMAGES: plt.show()
     plt.close(fig)
@@ -614,7 +634,7 @@ def plot_outputs(step, time_kyr, result):
     axes[1, 1].semilogx(radius_au, result["q_annulus"], lw=1.5)
     axes[1, 1].axhline(1.0, color="black", ls="--", lw=1.0)
     axes[1, 1].set(xlabel="R [AU]", ylabel="Annular Q"); axes[1, 1].grid(alpha=0.25, which="both")
-    fig.suptitle(rf"Toomre analysis: step={step:05d}, $t={time_kyr:.1f}$ kyr, $|z|\leq{Z_HALF_WIDTH_AU:g}$ AU")
+    fig.suptitle(rf"Toomre analysis: step={step:05d}, $t={time_kyr:.1f}$ kyr, $|z|\leq{Z_HALF_WIDTH_AU:g}$ AU, {BZ0_LABEL}")
     fig.tight_layout(); fig.savefig(OUTPUT_DIRS["summary"] / f"Q_summary_{suffix}.png", dpi=DPI)
     if SHOW_IMAGES: plt.show()
     plt.close(fig)

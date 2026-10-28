@@ -34,6 +34,9 @@ DATADIR = Path("~/athena-project/results/○○").expanduser().resolve()
 VTK_GLOB = "Toyouchi.block*.out2.*.vtk"
 STEPS = None                         # None: 全VTK時刻
 
+# True: metadataからraccを取得し、中心のr < raccを白抜きにする
+MASK_RACC = True
+
 OUTPUT_ROOT = DATADIR / "jeans_analysis"
 OUTPUT_DIRS = {
     "instability": {
@@ -369,7 +372,16 @@ def centered_log_image(ax, values, extent, vmin, center, vmax, cmap):
     )
 
 
-def save_outputs(step, time_kyr, result, length_au, mass_msun):
+def mask_racc_on_map(values, map_data, length_au, racc_au):
+    if not MASK_RACC:
+        return values
+    x = 0.5 * (map_data["x_edges"][:-1] + map_data["x_edges"][1:]) * length_au
+    y = 0.5 * (map_data["y_edges"][:-1] + map_data["y_edges"][1:]) * length_au
+    xx, yy = np.meshgrid(x, y)
+    return np.where(xx*xx + yy*yy < racc_au**2, np.nan, values)
+
+
+def save_outputs(step, time_kyr, result, length_au, mass_msun, racc_au, bz0_label):
     suffix = f"{step:05d}"
     for view_name, map_data in result["maps"].items():
         extent = extent_scaled(map_data, length_au)
@@ -377,13 +389,13 @@ def save_outputs(step, time_kyr, result, length_au, mass_msun):
 
         fig, ax = plt.subplots(figsize=FIGSIZE)
         image = centered_log_image(
-            ax, map_data["instability_map"], extent,
+            ax, mask_racc_on_map(map_data["instability_map"], map_data, length_au, racc_au), extent,
             INSTABILITY_DISPLAY_MIN, 1.0, INSTABILITY_DISPLAY_MAX, "RdBu_r"
         )
         format_map(ax)
         ax.set_title(
             rf"Spherical Jeans instability $M_{{\rm enc}}/M_J$, "
-            rf"$t={time_kyr:.1f}$ kyr, {view_label}"
+            rf"$t={time_kyr:.1f}$ kyr, {view_label}, {bz0_label}"
         )
         cbar = fig.colorbar(image, ax=ax, label=r"$M_{\rm enc}/M_J$")
         ticks = np.array([0.1, 0.3, 1.0, 3.0, 10.0])
@@ -400,14 +412,14 @@ def save_outputs(step, time_kyr, result, length_au, mass_msun):
 
         fig, ax = plt.subplots(figsize=FIGSIZE)
         image = centered_log_image(
-            ax, map_data["nj_map"], extent,
+            ax, mask_racc_on_map(map_data["nj_map"], map_data, length_au, racc_au), extent,
             JEANS_RESOLUTION_MIN, JEANS_CENTER_CELLS,
             JEANS_RESOLUTION_MAX, "RdBu"
         )
         format_map(ax)
         ax.set_title(
             rf"Jeans resolution $\lambda_J/\Delta x$ at $z=0$, "
-            rf"$t={time_kyr:.1f}$ kyr, {view_label}"
+            rf"$t={time_kyr:.1f}$ kyr, {view_label}, {bz0_label}"
         )
         cbar = fig.colorbar(image, ax=ax, label=r"$N_J=\lambda_J/\Delta x$")
         ticks = np.array([1.0, 2.0, 4.0, 8.0, 16.0, 32.0])
@@ -431,7 +443,7 @@ def save_outputs(step, time_kyr, result, length_au, mass_msun):
         ax.axhline(level, color="black", ls=style, lw=1.0, label=rf"$N_J={level:g}$")
     ax.set_xlabel("Spherical radius r [AU]")
     ax.set_ylabel(r"Jeans resolution $N_J=\lambda_J/\Delta x$")
-    ax.set_title(rf"Jeans-resolution profile, $t={time_kyr:.1f}$ kyr")
+    ax.set_title(rf"Jeans-resolution profile, $t={time_kyr:.1f}$ kyr, {bz0_label}")
     ax.grid(True, which="both", alpha=0.28)
     ax.legend(fontsize=9)
     fig.tight_layout()
@@ -473,6 +485,9 @@ def main():
     time_cgs = float(units["time_cgs"])
     cs_code = float(metadata["hydro"]["sound_speed_code"])
     g_code = float(units["gravity_constant_code"])
+    racc_au = float(metadata["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
+    bz0_microgauss = float(metadata["magnetic_field"]["initial_bz_microgauss"])
+    bz0_label = rf"$B_{{z0}}={bz0_microgauss:g}\,\mu{{\rm G}}$"
     mesh = metadata["mesh"]
     full_bounds = np.array([
         [mesh["x1min_code"], mesh["x1max_code"]],
@@ -517,7 +532,7 @@ def main():
         time_kyr = time_code * time_cgs / KYR_CGS
         print(f"[RUN  {number:3d}/{len(groups):3d}] step={step:05d}, t={time_kyr:.1f} kyr, blocks={len(paths)}")
         result = aggregate_step(paths, edges, bounds_by_view, cs_code, g_code)
-        save_outputs(step, time_kyr, result, length_au, mass_msun)
+        save_outputs(step, time_kyr, result, length_au, mass_msun, racc_au, bz0_label)
         finite_j = result["instability"][np.isfinite(result["instability"])]
         zoom_nj = result["maps"]["zoom_1over10"]["nj_map"]
         finite_nj = zoom_nj[np.isfinite(zoom_nj)]
