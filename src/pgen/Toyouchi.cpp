@@ -178,6 +178,7 @@ const Real fit_rmin_au = 139.9720348;
 const Real fit_rmax_au = 146698.0663;
 Real Vunit, Rhounit;
 Real mstar_fixed = 1.0;  // Fixed stellar mass in code units.
+Real fM = 1.0;  // Initial gas mass/density normalization; never applied to gravity.
 Real vr_taper_au = 580.0;
 Real core_a, core_b, core_c, core_d, core_mass_msun;
 Real taper_velocity_kms, taper_a, taper_b;
@@ -218,6 +219,12 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
   const Real gamma_input = pin->GetReal("hydro", "gamma");
   const Real pressure_unit = Rhounit * Vunit * Vunit;
   const Real acceleration_unit = Lunit / (Tunit*Tunit);
+  // Match FieldDiffusion's defaults. Hall/AD inputs are coefficients,
+  // not spatially constant diffusivities (see ConstDiffusivity).
+  const Real eta_ohm = pin->GetOrAddReal("problem", "eta_ohm", 0.0);
+  const Real eta_hall = pin->GetOrAddReal("problem", "eta_hall", 0.0);
+  const Real eta_ad = pin->GetOrAddReal("problem", "eta_ad", 0.0);
+  const Real diffusivity_unit = Lunit*Lunit/Tunit;
 
   std::ofstream out(temporary.c_str(), std::ios::out | std::ios::trunc);
   if (!out.is_open()) {
@@ -271,6 +278,8 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "    \"time_integration\": \"trapezoidal; first interval right endpoint\"\n"
       << "  },\n"
       << "  \"initial_conditions\": {\n"
+      << "    \"fM\": " << fM << ",\n"
+      << "    \"mass_scaling\": \"initial gas density and rotation mass only; vr uses original mass; floor unchanged\",\n"
       << "    \"rotation_enabled\": " << JsonBool(use_rotation) << ",\n"
       << "    \"radial_inflow_enabled\": " << JsonBool(use_radial_inflow) << ",\n"
       << "    \"density_noise_enabled\": " << JsonBool(use_density_noise) << ",\n"
@@ -285,6 +294,7 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
   for (int n = 0; n < 8; ++n) out << (n == 0 ? "" : ", ") << velocity_coeff[n];
   out << "],\n"
       << "    \"core_mass_msun\": " << core_mass_msun << ",\n"
+      << "    \"core_mass_scaled_msun\": " << fM*core_mass_msun << ",\n"
       << "    \"core_coefficients\": [" << core_a << ", " << core_b << ", "
       << core_c << ", " << core_d << "],\n"
       << "    \"velocity_taper_coefficients\": [" << taper_velocity_kms << ", "
@@ -293,7 +303,21 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "  \"magnetic_field\": {\n"
       << "    \"enabled_at_compile_time\": " << JsonBool(MAGNETIC_FIELDS_ENABLED) << ",\n"
       << "    \"initial_bz_microgauss\": " << bz_microgauss << ",\n"
-      << "    \"initial_bz_code\": " << bz_code << "\n"
+      << "    \"initial_bz_code\": " << bz_code << ",\n"
+      << "    \"initial_bz_gauss\": " << bz_microgauss*1.0e-6 << ",\n"
+      << "    \"normalization\": \"B_gauss = B_code * Bunit; Pmag_code = B_code^2/2\",\n"
+      << "    \"sts_enabled_at_compile_time\": " << JsonBool(STS_ENABLED) << ",\n"
+      << "    \"eta_ohm_code\": " << eta_ohm << ",\n"
+      << "    \"eta_hall_code\": " << eta_hall << ",\n"
+      << "    \"eta_ad_code\": " << eta_ad << ",\n"
+      << "    \"diffusivity_unit_cm2_s\": " << diffusivity_unit << ",\n"
+      << "    \"eta_ohm_cm2_s\": " << eta_ohm*diffusivity_unit << ",\n"
+      << "    \"hall_coefficient_cgs\": " << eta_hall*diffusivity_unit*Rhounit/Bunit << ",\n"
+      << "    \"hall_coefficient_cgs_units\": \"g cm^-1 s^-1 G^-1\",\n"
+      << "    \"ad_coefficient_cgs\": " << eta_ad*diffusivity_unit/(Bunit*Bunit) << ",\n"
+      << "    \"ad_coefficient_cgs_units\": \"cm^2 s^-1 G^-2\",\n"
+      << "    \"diffusivity_model\": \"ConstDiffusivity: etaO=eta_ohm; etaH=eta_hall*abs(B)/rho; etaA=eta_ad*abs(B)^2 (code units)\",\n"
+      << "    \"hall_emf_implemented\": false\n"
       << "  },\n"
       << "  \"mesh\": {\n"
       << "    \"x1min_code\": " << pm->mesh_size.x1min << ",\n"
@@ -353,6 +377,7 @@ Real Polynomial(const Real *coeff, Real x, int derivative = 0) {
 Real EvalMencLog10(Real x) { return Polynomial(mass_coeff, x); }
 Real EvalMencDerivative(Real x) { return Polynomial(mass_coeff, x, 1); }
 
+// Original, unscaled gas-only profile; also used by the radial velocity fit.
 Real MencMMHMsun(Real r_code) {
   const Real r_au = r_code * Lunit / AU;
   if (r_au < fit_rmin_au) {
@@ -363,8 +388,8 @@ Real MencMMHMsun(Real r_code) {
       std::min(r_au, fit_rmax_au))));
 }
 
-Real MencMMHCode(Real r_code) {
-  return MencMMHMsun(r_code) * Msun / Munit;
+Real MencGasScaledCode(Real r_code) {
+  return fM * (MencMMHMsun(r_code) * Msun / Munit);
 }
 
 Real RhoMMHCode(Real r_code) {
@@ -526,6 +551,12 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
 
+  fM = pin->GetOrAddReal("problem", "fM", 1.0);
+  if (!std::isfinite(fM) || fM <= 0.0) {
+    std::stringstream msg;
+    msg << "problem/fM must be finite and strictly positive.";
+    ATHENA_ERROR(msg);
+  }
   mstar_fixed = pin->GetOrAddReal("problem", "mstar_init", 1.0);
   vr_taper_au = pin->GetOrAddReal("problem", "vr_taper_au", 580.0);
   if (!(std::isfinite(mstar_fixed) && mstar_fixed >= 0.0
@@ -545,7 +576,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   if (Globals::my_rank == 0) {
     std::cout << "Fixed stellar mass=" << mstar_fixed
               << " code mass; Wise19 core radius=" << fit_rmin_au
-              << " AU; velocity taper=" << vr_taper_au << " AU" << std::endl;
+              << " AU; velocity taper=" << vr_taper_au << " AU"
+              << "; initial gas mass factor fM=" << fM << std::endl;
   }
 
   // 中心星重力のON,OFF読み込み
@@ -638,7 +670,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	Real z = pcoord->x3v(k) - z0;
 	Real r_sph = std::sqrt(x*x + y*y +z*z);
 
-        Real rho_final = RhoMMHCode(r_sph);
+        // Scale the whole original profile, including core and outer continuation.
+        // EOS density floor remains unchanged; noise is applied multiplicatively.
+        Real rho_final = fM * RhoMMHCode(r_sph);
         Real P_final;
 
         // Optional cell-wise density perturbation, including the central gas.
@@ -692,7 +726,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         if (use_rotation && r_cyl > 0.0) {
           // Hold the endpoint rotation speed constant beyond the fitted radius.
           const Real r_rot = std::min(r_cyl, fit_rmax_au*AU/Lunit);
-          const Real menc_rot_code = MencMMHCode(r_rot);
+          const Real menc_rot_code = MencGasScaledCode(r_rot);
 
           vphi_eff =
               0.5 * std::sqrt(gconst * menc_rot_code / r_rot);
