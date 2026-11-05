@@ -11,3 +11,8 @@ __pycache__/
 /configure.log
 /src/defs.hpp
 /mesh_structure.dat
+
+# CFCA build and smoke-test logs
+/build-cfca.log
+/cfca-smoke81-*.out
+/cfca-smoke81-*.err
