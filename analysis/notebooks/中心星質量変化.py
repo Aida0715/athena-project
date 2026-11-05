@@ -159,9 +159,9 @@ def load_stellar_mass_history(dataset):
         raise RuntimeError(f"HST header could not be parsed: {hst_file}")
 
     time_info = find_column(column_map, ("time",))
-    mstar_info = find_column(column_map, ("Mstar", "mstar", "M_star"))
+    mstar_info = find_column(column_map, ("Mstar_diag",))
     if time_info is None or mstar_info is None:
-        raise KeyError(f"time or Mstar column was not found: {hst_file}")
+        raise KeyError(f"time or Mstar_diag column was not found: {hst_file}")
 
     time_column = time_info["numpy_index"]
     mstar_column = mstar_info["numpy_index"]
