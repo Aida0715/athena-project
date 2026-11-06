@@ -16,3 +16,7 @@ __pycache__/
 /build-cfca.log
 /cfca-smoke81-*.out
 /cfca-smoke81-*.err
+
+# CFCA restart test logs
+/cfca-restart81-*.out
+/cfca-restart81-*.err
