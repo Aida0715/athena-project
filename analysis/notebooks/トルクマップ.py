@@ -6,17 +6,22 @@
 # 全タイムステップ：
 # x-y平面 密度・速度方向＋角運動量輸送診断
 #
-# パネル
-#   1. ガス自己重力トルク密度
-#   2. 圧力勾配トルク密度
-#   3. 移流角運動量流束
+# パネル（各 PLOT_* が True のものだけ描く）
+#   1. ガス自己重力トルク密度   gself_x, gself_y
+#   2. 圧力勾配トルク密度       apres_x, apres_y
+#   3. 磁気トルク密度           amag_x, amag_y
+#   4. 移流角運動量流束         rho, vel から計算
+#
+# トルク密度はコードが出力した加速度から
+#   T_z = rho (x a_y - y a_x)
+# 中心星・NFW加速度は動径方向なのでzトルクはゼロになり、パネルにはしない。
 #
 # 表示
 #   背景：密度（白黒）
 #   赤：正
 #   青：負
 #   黒矢印：
-#     自己重力・圧力パネルでは規格化した(vx, vy)方向
+#     トルクパネルでは規格化した(vx, vy)方向
 #     移流フラックスパネルでは規格化した動径速度方向
 #       sign(v_R) e_R（外向き流は外向き、降着流は中心向き）
 #
@@ -62,20 +67,14 @@ vtk_dir = Path(
     )
 ).resolve()
 
-output_dir = (
+output_root = (
     vtk_dir
     / "xy_torque_maps"
-)
-
-output_dir.mkdir(
-    parents=True,
-    exist_ok=True,
 )
 
 STREAM_TOKEN = ".out2."
 
 print(f"[INFO] Input : {vtk_dir}")
-print(f"[INFO] Output: {output_dir}")
 
 if not vtk_dir.is_dir():
     raise FileNotFoundError(
@@ -144,11 +143,45 @@ RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
 BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
 
-# 表示範囲：-10^5 ～ +10^5 AU
-PLOT_RADIUS_AU = 1.0e5
+# 描画範囲を手動選択。"full" または "zoom" を指定する。
+TORQUE_PLOT_MODE = "full"
+if TORQUE_PLOT_MODE not in {"full", "zoom"}:
+    raise ValueError('TORQUE_PLOT_MODE must be "full" or "zoom".')
 
-# 等温音速（code velocity）
-ISO_SOUND_SPEED_CODE = float(METADATA["hydro"]["sound_speed_code"])
+# metadataの計算領域からfull範囲を自動取得。zoomは各軸幅の1/10。
+MESH_METADATA = METADATA["mesh"]
+FULL_PLOT_RADIUS_AU = max(
+    abs(float(MESH_METADATA["x1min_code"])),
+    abs(float(MESH_METADATA["x1max_code"])),
+    abs(float(MESH_METADATA["x2min_code"])),
+    abs(float(MESH_METADATA["x2max_code"])),
+) * LENGTH_UNIT_AU
+PLOT_RADIUS_AU = (
+    FULL_PLOT_RADIUS_AU
+    if TORQUE_PLOT_MODE == "full"
+    else FULL_PLOT_RADIUS_AU / 10.0
+)
+PLOT_RANGE_LABEL = (
+    "full domain"
+    if TORQUE_PLOT_MODE == "full"
+    else "1/10 zoom"
+)
+output_dir = output_root / (
+    "full"
+    if TORQUE_PLOT_MODE == "full"
+    else "zoom_1over10"
+)
+output_dir.mkdir(parents=True, exist_ok=True)
+
+print(f"[INFO] Output: {output_dir}")
+print(f"[INFO] Plot mode: {TORQUE_PLOT_MODE} ({PLOT_RANGE_LABEL})")
+print(f"[INFO] Plot radius: {PLOT_RADIUS_AU:.6e} AU")
+
+# True のパネルだけ描く。必要なVTK変数が無いとその場で止める。
+PLOT_SELF_GRAVITY_TORQUE = True
+PLOT_PRESSURE_TORQUE = True
+PLOT_MAGNETIC_TORQUE = True
+PLOT_ADVECTIVE_FLUX = True
 
 # 本描画解像度
 MAP_RESOLUTION = 700
@@ -177,12 +210,65 @@ TORQUE_ALPHA = 0.68
 DENSITY_CMAP = "Greys"
 TORQUE_CMAP = "RdBu_r"
 
-FIGSIZE = (18, 6)
+PANEL_WIDTH = 6.0
+PANEL_HEIGHT = 6.0
 DPI = 200
+
+# 現行 Toyouchi.cpp の user output 名。
+# トルクに使うのは面内2成分。z成分はz=0面のT_zに入らない。
+PANEL_CATALOG = (
+    {
+        "enabled": PLOT_SELF_GRAVITY_TORQUE,
+        "key": "torque_self",
+        "fields": ("gself_x", "gself_y"),
+        "title": "Self-gravity torque density",
+        "colorbar": r"$\mathcal{T}_{z,\rm self}$ [code units]",
+        "quiver": "velocity",
+    },
+    {
+        "enabled": PLOT_PRESSURE_TORQUE,
+        "key": "torque_pressure",
+        "fields": ("apres_x", "apres_y"),
+        "title": "Pressure-gradient torque density",
+        "colorbar": r"$\mathcal{T}_{z,P}$ [code units]",
+        "quiver": "velocity",
+    },
+    {
+        "enabled": PLOT_MAGNETIC_TORQUE,
+        "key": "torque_magnetic",
+        "fields": ("amag_x", "amag_y"),
+        "title": "Magnetic torque density",
+        "colorbar": r"$\mathcal{T}_{z,B}$ [code units]",
+        "quiver": "velocity",
+    },
+    {
+        "enabled": PLOT_ADVECTIVE_FLUX,
+        "key": "angular_momentum_flux",
+        "fields": (),
+        "title": "Advective angular-momentum flux",
+        "colorbar": r"$F_{J,\rm adv}$ [code units]",
+        "quiver": "radial",
+    },
+)
+
+ACTIVE_PANELS = [panel for panel in PANEL_CATALOG if panel["enabled"]]
+if not ACTIVE_PANELS:
+    raise RuntimeError("すべての PLOT_* が False です。1つ以上を True にしてください。")
+
+REQUIRED_ACCELERATIONS = tuple(dict.fromkeys(
+    name
+    for panel in ACTIVE_PANELS
+    for name in panel["fields"]
+))
+print("[INFO] Panels:")
+for panel in ACTIVE_PANELS:
+    sources = ", ".join(panel["fields"]) if panel["fields"] else "rho, vel"
+    print(f"  {panel['key']}: {sources}")
 
 
 # ============================================================
-# VTK変数名候補
+# VTK変数名
+# prim は rho, vel。加速度は SetUserOutputVariableName の名前。
 # ============================================================
 DENSITY_CANDIDATES = (
     "rho",
@@ -199,28 +285,6 @@ VELOCITY_CANDIDATES = (
 MOMENTUM_CANDIDATES = (
     "mom",
     "momentum",
-)
-
-POTENTIAL_CANDIDATES = (
-    "phi",
-    "potential",
-    "grav_potential",
-)
-
-# 将来の磁場出力に対応する候補
-MAGNETIC_VECTOR_CANDIDATES = (
-    "Bcc",
-    "Bcc_xyz",
-    "bcc",
-    "magnetic_field",
-    "B",
-)
-
-MAGNETIC_COMPONENT_CANDIDATES = (
-    ("Bcc1", "Bcc2", "Bcc3"),
-    ("bcc1", "bcc2", "bcc3"),
-    ("bx", "by", "bz"),
-    ("Bx", "By", "Bz"),
 )
 
 
@@ -280,128 +344,40 @@ def find_cell_field(grid, candidates):
     return None
 
 
-def extract_base_fields(grid, filename):
-    density_name = find_cell_field(
-        grid,
-        DENSITY_CANDIDATES,
-    )
-
-    potential_name = find_cell_field(
-        grid,
-        POTENTIAL_CANDIDATES,
-    )
-
-    if density_name is None:
+def require_cell_field(grid, names, filename):
+    missing = [name for name in names if name not in grid.cell_data]
+    if missing:
+        available = ", ".join(grid.cell_data.keys())
         raise KeyError(
-            f"Density field not found: {filename}"
+            f"Missing {missing} in {filename}. Available cell data: {available}"
         )
-
-    if potential_name is None:
-        raise KeyError(
-            f"Self-gravity potential phi "
-            f"not found: {filename}"
-        )
-
-    rho = np.asarray(
-        grid.cell_data[density_name]
-    ).reshape(-1)
-
-    phi = np.asarray(
-        grid.cell_data[potential_name]
-    ).reshape(-1)
-
-    velocity_name = find_cell_field(
-        grid,
-        VELOCITY_CANDIDATES,
-    )
-
-    if velocity_name is not None:
-        velocity = np.asarray(
-            grid.cell_data[velocity_name]
-        )
-
-    else:
-        momentum_name = find_cell_field(
-            grid,
-            MOMENTUM_CANDIDATES,
-        )
-
-        if momentum_name is None:
-            raise KeyError(
-                f"Velocity/momentum field "
-                f"not found: {filename}"
-            )
-
-        momentum = np.asarray(
-            grid.cell_data[momentum_name]
-        )
-
-        velocity = (
-            momentum
-            / np.maximum(
-                rho[:, None],
-                1.0e-300,
-            )
-        )
-
-    if (
-        velocity.ndim != 2
-        or velocity.shape[1] < 3
-    ):
-        raise ValueError(
-            f"Unexpected velocity shape: "
-            f"{velocity.shape}"
-        )
-
-    return rho, phi, velocity[:, :3]
-
-
-# ============================================================
-# 将来用：磁場の検索関数
-# 現時点ではトルク計算には使用しない
-# ============================================================
-def extract_optional_magnetic_field(grid):
-    vector_name = find_cell_field(
-        grid,
-        MAGNETIC_VECTOR_CANDIDATES,
-    )
-
-    if vector_name is not None:
-        magnetic = np.asarray(
-            grid.cell_data[vector_name]
-        )
-
-        if (
-            magnetic.ndim == 2
-            and magnetic.shape[1] >= 3
-        ):
-            return magnetic[:, :3]
-
-    lower_to_original = {
-        name.lower(): name
-        for name in grid.cell_data.keys()
+    return {
+        name: np.asarray(grid.cell_data[name]).reshape(-1)
+        for name in names
     }
 
-    for component_names in (
-        MAGNETIC_COMPONENT_CANDIDATES
-    ):
-        if all(
-            name.lower() in lower_to_original
-            for name in component_names
-        ):
-            actual_names = [
-                lower_to_original[name.lower()]
-                for name in component_names
-            ]
 
-            return np.column_stack([
-                np.asarray(
-                    grid.cell_data[name]
-                ).reshape(-1)
-                for name in actual_names
-            ])
+def extract_base_fields(grid, filename):
+    density_name = find_cell_field(grid, DENSITY_CANDIDATES)
+    if density_name is None:
+        raise KeyError(f"Density field not found: {filename}")
 
-    return None
+    rho = np.asarray(grid.cell_data[density_name]).reshape(-1)
+    velocity_name = find_cell_field(grid, VELOCITY_CANDIDATES)
+    if velocity_name is not None:
+        velocity = np.asarray(grid.cell_data[velocity_name])
+    else:
+        momentum_name = find_cell_field(grid, MOMENTUM_CANDIDATES)
+        if momentum_name is None:
+            raise KeyError(f"Velocity/momentum field not found: {filename}")
+        momentum = np.asarray(grid.cell_data[momentum_name])
+        velocity = momentum / np.maximum(rho[:, None], 1.0e-300)
+
+    if velocity.ndim != 2 or velocity.shape[1] < 3:
+        raise ValueError(f"Unexpected velocity shape: {velocity.shape}")
+
+    accelerations = require_cell_field(grid, REQUIRED_ACCELERATIONS, filename)
+    return rho, velocity[:, :3], accelerations
 
 
 # ============================================================
@@ -430,36 +406,16 @@ def extract_xy_midplane(filename):
     ):
         return None
 
-    rho_code, phi_code, velocity = (
-        extract_base_fields(
-            grid,
-            filename,
-        )
+    rho_code, velocity, accelerations = extract_base_fields(
+        grid,
+        filename,
     )
 
     working_grid = grid.copy()
-
-    working_grid.cell_data[
-        "__rho__"
-    ] = rho_code
-
-    working_grid.cell_data[
-        "__phi__"
-    ] = phi_code
-
-    working_grid.cell_data[
-        "__velocity__"
-    ] = velocity
-
-    # 将来磁場が追加されたときに認識
-    magnetic = extract_optional_magnetic_field(
-        grid
-    )
-
-    if magnetic is not None:
-        working_grid.cell_data[
-            "__magnetic__"
-        ] = magnetic
+    working_grid.cell_data["__rho__"] = rho_code
+    working_grid.cell_data["__velocity__"] = velocity
+    for name, values in accelerations.items():
+        working_grid.cell_data[name] = values
 
     point_grid = (
         working_grid.cell_data_to_point_data(
@@ -483,10 +439,6 @@ def extract_xy_midplane(filename):
         sliced.point_data["__rho__"]
     ).reshape(-1)
 
-    phi_slice = np.asarray(
-        sliced.point_data["__phi__"]
-    ).reshape(-1)
-
     velocity_slice = np.asarray(
         sliced.point_data["__velocity__"]
     )
@@ -507,7 +459,6 @@ def extract_xy_midplane(filename):
         & np.isfinite(y_code)
         & np.isfinite(rho_slice)
         & (rho_slice > 0.0)
-        & np.isfinite(phi_slice)
         & np.all(
             np.isfinite(velocity_slice),
             axis=1,
@@ -519,30 +470,39 @@ def extract_xy_midplane(filename):
     if not np.any(valid):
         return None
 
+    vx_slice = velocity_slice[:, 0]
+    vy_slice = velocity_slice[:, 1]
+    diagnostics = {}
+    for panel in ACTIVE_PANELS:
+        if panel["fields"]:
+            ax_name, ay_name = panel["fields"]
+            ax = np.asarray(sliced.point_data[ax_name]).reshape(-1)
+            ay = np.asarray(sliced.point_data[ay_name]).reshape(-1)
+            value = rho_slice * (x_code * ay - y_code * ax)
+        else:
+            radius = np.hypot(x_code, y_code)
+            radial_velocity = np.divide(
+                x_code * vx_slice + y_code * vy_slice,
+                radius,
+                out=np.zeros_like(radius),
+                where=radius > 0.0,
+            )
+            specific_angular_momentum = x_code * vy_slice - y_code * vx_slice
+            value = rho_slice * radial_velocity * specific_angular_momentum
+        if not np.all(np.isfinite(value[valid])):
+            raise ValueError(
+                f"Non-finite {panel['key']} in {filename}"
+            )
+        diagnostics[panel["key"]] = value[valid]
+
     result = {
         "x_code": x_code[valid],
         "y_code": y_code[valid],
         "rho_code": rho_slice[valid],
-        "phi_code": phi_slice[valid],
-        "vx": velocity_slice[valid, 0],
-        "vy": velocity_slice[valid, 1],
+        "vx": vx_slice[valid],
+        "vy": vy_slice[valid],
+        **diagnostics,
     }
-
-    if "__magnetic__" in sliced.point_data:
-        magnetic_slice = np.asarray(
-            sliced.point_data["__magnetic__"]
-        )
-
-        result["bx"] = magnetic_slice[
-            valid, 0
-        ]
-        result["by"] = magnetic_slice[
-            valid, 1
-        ]
-        result["bz"] = magnetic_slice[
-            valid, 2
-        ]
-
     return result
 
 
@@ -594,7 +554,6 @@ def merge_duplicate_points(data):
     merged = {
         "x_code": average(data["x_code"]),
         "y_code": average(data["y_code"]),
-        "phi_code": average(data["phi_code"]),
         "vx": average(data["vx"]),
         "vy": average(data["vy"]),
     }
@@ -613,14 +572,8 @@ def merge_duplicate_points(data):
         10.0**merged_log_rho
     )
 
-    # 将来用磁場
-    if all(
-        key in data
-        for key in ("bx", "by", "bz")
-    ):
-        merged["bx"] = average(data["bx"])
-        merged["by"] = average(data["by"])
-        merged["bz"] = average(data["bz"])
+    for panel in ACTIVE_PANELS:
+        merged[panel["key"]] = average(data[panel["key"]])
 
     return merged
 
@@ -633,9 +586,9 @@ def extract_snapshot(step_info):
         "x_code",
         "y_code",
         "rho_code",
-        "phi_code",
         "vx",
         "vy",
+        *(panel["key"] for panel in ACTIVE_PANELS),
     )
 
     collected = {
@@ -643,13 +596,6 @@ def extract_snapshot(step_info):
         for key in required_keys
     }
 
-    magnetic_collected = {
-        "bx": [],
-        "by": [],
-        "bz": [],
-    }
-
-    all_blocks_have_magnetic = True
     used_blocks = 0
 
     for filename in step_info["files"]:
@@ -668,17 +614,8 @@ def extract_snapshot(step_info):
                     block[key]
                 )
 
-            if all(
-                key in block
-                for key in ("bx", "by", "bz")
-            ):
-                for key in magnetic_collected:
-                    magnetic_collected[key].append(
-                        block[key]
-                    )
-            else:
-                all_blocks_have_magnetic = False
-
+        except KeyError:
+            raise
         except Exception as error:
             print(
                 f"[WARNING] "
@@ -697,15 +634,6 @@ def extract_snapshot(step_info):
         for key, values in collected.items()
     }
 
-    if (
-        all_blocks_have_magnetic
-        and magnetic_collected["bx"]
-    ):
-        for key, values in (
-            magnetic_collected.items()
-        ):
-            raw[key] = np.concatenate(values)
-
     merged = merge_duplicate_points(raw)
 
     merged["step"] = step_info["step"]
@@ -720,8 +648,7 @@ def extract_snapshot(step_info):
         f"[INFO] step={step_info['step']:05d}: "
         f"blocks={used_blocks}/"
         f"{len(step_info['files'])}, "
-        f"points={len(merged['x_code']):,}, "
-        f"B={'yes' if 'bx' in merged else 'no'}"
+        f"points={len(merged['x_code']):,}"
     )
 
     return merged
@@ -783,11 +710,6 @@ def calculate_diagnostics(
         axis_code,
     )
 
-    spacing_code = (
-        axis_code[1]
-        - axis_code[0]
-    )
-
     points = np.column_stack(
         (
             snapshot["x_code"],
@@ -812,13 +734,6 @@ def calculate_diagnostics(
         10.0**log_rho_map
     )
 
-    phi_code = interpolate_field(
-        points,
-        snapshot["phi_code"],
-        X_code,
-        Y_code,
-    )
-
     vx = interpolate_field(
         points,
         snapshot["vx"],
@@ -833,53 +748,7 @@ def calculate_diagnostics(
         Y_code,
     )
 
-    # --------------------------------------------------------
-    # 自己重力加速度：g = -grad(phi)
-    # np.gradientの返り値は(y方向, x方向)
-    # --------------------------------------------------------
-    dphi_dy, dphi_dx = np.gradient(
-        phi_code,
-        spacing_code,
-        spacing_code,
-        edge_order=2,
-    )
-
-    gx_self = -dphi_dx
-    gy_self = -dphi_dy
-
-    torque_self = (
-        rho_code
-        * (
-            X_code * gy_self
-            - Y_code * gx_self
-        )
-    )
-
-    # --------------------------------------------------------
-    # 等温圧力：P = cs^2 rho
-    # --------------------------------------------------------
-    pressure_code = (
-        ISO_SOUND_SPEED_CODE**2
-        * rho_code
-    )
-
-    dP_dy, dP_dx = np.gradient(
-        pressure_code,
-        spacing_code,
-        spacing_code,
-        edge_order=2,
-    )
-
-    # f_P = -grad(P)
-    torque_pressure = (
-        -X_code * dP_dy
-        + Y_code * dP_dx
-    )
-
-    # --------------------------------------------------------
-    # 移流角運動量流束
-    # F_J,adv = rho v_R j_z
-    # --------------------------------------------------------
+    # 矢印用。診断量そのものはVTK加速度から点上で計算済み。
     R_code = np.hypot(
         X_code,
         Y_code,
@@ -896,16 +765,15 @@ def calculate_diagnostics(
 
     v_R[R_code == 0.0] = 0.0
 
-    j_z = (
-        X_code * vy
-        - Y_code * vx
-    )
-
-    angular_momentum_flux = (
-        rho_code
-        * v_R
-        * j_z
-    )
+    diagnostics = {
+        panel["key"]: interpolate_field(
+            points,
+            snapshot[panel["key"]],
+            X_code,
+            Y_code,
+        )
+        for panel in ACTIVE_PANELS
+    }
 
     return {
         "X_code": X_code,
@@ -915,12 +783,7 @@ def calculate_diagnostics(
         "vy": vy,
         "R_code": R_code,
         "v_R": v_R,
-        "j_z": j_z,
-        "torque_self": torque_self,
-        "torque_pressure": torque_pressure,
-        "angular_momentum_flux": (
-            angular_momentum_flux
-        ),
+        **diagnostics,
     }
 
 
@@ -1071,9 +934,8 @@ print(
 # Pass 2：全時刻共通のトルク表示範囲
 # ============================================================
 diagnostic_samples = {
-    "torque_self": [],
-    "torque_pressure": [],
-    "angular_momentum_flux": [],
+    panel["key"]: []
+    for panel in ACTIVE_PANELS
 }
 
 print(
@@ -1140,26 +1002,7 @@ axis_formatter = FuncFormatter(
     )
 )
 
-panel_definitions = [
-    (
-        "torque_self",
-        "Self-gravity torque density",
-        r"$\mathcal{T}_{z,\rm self}$"
-        " [code units]",
-    ),
-    (
-        "torque_pressure",
-        "Pressure-gradient torque density",
-        r"$\mathcal{T}_{z,P}$"
-        " [code units]",
-    ),
-    (
-        "angular_momentum_flux",
-        "Advective angular-momentum flux",
-        r"$F_{J,\rm adv}$"
-        " [code units]",
-    ),
-]
+panel_definitions = ACTIVE_PANELS
 
 saved_files = []
 
@@ -1314,19 +1157,20 @@ for frame_index, snapshot in enumerate(
 
     fig, axes = plt.subplots(
         1,
-        3,
-        figsize=FIGSIZE,
+        len(panel_definitions),
+        figsize=(
+            PANEL_WIDTH * len(panel_definitions),
+            PANEL_HEIGHT,
+        ),
         constrained_layout=True,
+        squeeze=False,
     )
+    axes = axes[0]
 
-    for ax, (
-        diagnostic_key,
-        title,
-        colorbar_label,
-    ) in zip(
-        axes,
-        panel_definitions,
-    ):
+    for ax, panel in zip(axes, panel_definitions):
+        diagnostic_key = panel["key"]
+        title = panel["title"]
+        colorbar_label = panel["colorbar"]
         central_mask = (
             X_AU*X_AU + Y_AU*Y_AU < RACC_AU**2
             if MASK_RACC else np.zeros_like(X_AU, dtype=bool)
@@ -1386,7 +1230,7 @@ for frame_index, snapshot in enumerate(
 
         # 自己重力・圧力パネルは従来の速度方向。
         # 移流フラックスパネルだけ規格化したv_R方向を使う。
-        if diagnostic_key == "angular_momentum_flux":
+        if panel["quiver"] == "radial":
             quiver_u = unit_vr_x
             quiver_v = unit_vr_y
         else:
@@ -1485,7 +1329,8 @@ for frame_index, snapshot in enumerate(
         "Density, velocity direction, "
         "and angular-momentum transport\n"
         f"step={snapshot['step']:05d}, "
-        f"t={snapshot['time_myr']:.6e} Myr, {BZ0_LABEL}",
+        f"t={snapshot['time_myr']:.6e} Myr, "
+        f"{PLOT_RANGE_LABEL}, {BZ0_LABEL}",
         fontsize=16,
     )
 
