@@ -141,7 +141,11 @@ print(
 MASK_RACC = True
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = (
+    rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, "
+    rf"$f_M={FM_VALUE:g}$"
+)
 
 # 描画範囲を手動選択。"full" または "zoom" を指定する。
 TORQUE_PLOT_MODE = "full"
