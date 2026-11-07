@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # commit: f9614ca //本シミュレーションに対応するToyouchi.cppをgitの履歴から追跡可
-# fM=0.4（もとのガス質量の80％）、Bz0=10μGで比較実験
+# fM=0.4（もとのガス質量の40％）、Bz0=10μGで比較実験
 # 20kyrの短時間テスト用
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
