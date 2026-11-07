@@ -20,3 +20,7 @@ __pycache__/
 # CFCA restart test logs
 /cfca-restart81-*.out
 /cfca-restart81-*.err
+
+# CFCA benchmark logs (20 and 200 steps)
+/cfca-bench71-*.out
+/cfca-bench71-*.err
