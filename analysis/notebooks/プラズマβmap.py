@@ -104,7 +104,11 @@ LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 TIME_UNIT_MYR = T_UNIT_CGS / YEAR_CGS / 1.0e6
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = (
+    rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, "
+    rf"$f_M={FM_VALUE:g}$"
+)
 
 print("=== Plasma-beta x-z maps ===")
 print(f"Input          : {vtk_dir}")
@@ -679,7 +683,11 @@ LENGTH_UNIT_AU = L_UNIT_CGS / AU_CGS
 TIME_UNIT_MYR = T_UNIT_CGS / YEAR_CGS / 1.0e6
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = (
+    rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, "
+    rf"$f_M={FM_VALUE:g}$"
+)
 
 print("=== Plasma-beta x-z maps ===")
 print(f"Input          : {vtk_dir}")

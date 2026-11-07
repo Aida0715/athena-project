@@ -77,7 +77,8 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 MASK_RACC = True
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
 
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800
@@ -530,7 +531,8 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 MASK_RACC = True
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
 
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800
@@ -988,7 +990,8 @@ TIME_UNIT_KYR = T_UNIT_CGS / YEAR_CGS / 1.0e3
 MASK_RACC = True
 RACC_AU = float(METADATA["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
 
 FULL_RESOLUTION = 800
 ZOOM_RESOLUTION = 800

@@ -138,7 +138,11 @@ RACC_AU = (
     if MASK_RACC else 0.0
 )
 BZ0_MICROGAUSS = float(METADATA["magnetic_field"]["initial_bz_microgauss"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$"
+FM_VALUE = float(METADATA["initial_conditions"]["fM"])
+BZ0_LABEL = (
+    rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, "
+    rf"$f_M={FM_VALUE:g}$"
+)
 
 mesh_meta = METADATA["mesh"]
 FULL_BOUNDS = np.array([

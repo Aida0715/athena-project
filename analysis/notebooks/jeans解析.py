@@ -487,7 +487,11 @@ def main():
     g_code = float(units["gravity_constant_code"])
     racc_au = float(metadata["virtual_sphere"]["radius_au"]) if MASK_RACC else 0.0
     bz0_microgauss = float(metadata["magnetic_field"]["initial_bz_microgauss"])
-    bz0_label = rf"$B_{{z0}}={bz0_microgauss:g}\,\mu{{\rm G}}$"
+    fm_value = float(metadata["initial_conditions"]["fM"])
+    bz0_label = (
+        rf"$B_{{z0}}={bz0_microgauss:g}\,\mu{{\rm G}}$, "
+        rf"$f_M={fm_value:g}$"
+    )
     mesh = metadata["mesh"]
     full_bounds = np.array([
         [mesh["x1min_code"], mesh["x1max_code"]],
