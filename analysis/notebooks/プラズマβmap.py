@@ -61,7 +61,7 @@ def xz_load_metadata(directory):
 XZ_METADATA = xz_load_metadata(XZ_VTK_DIR)
 XZ_UNITS = XZ_METADATA["units"]
 XZ_LENGTH_UNIT_AU = float(XZ_UNITS["length_cgs"]) / XZ_AU_CGS
-XZ_TIME_UNIT_MYR = float(XZ_UNITS["time_cgs"]) / XZ_YEAR_CGS / 1.0e6
+XZ_TIME_UNIT_KYR = float(XZ_UNITS["time_cgs"]) / XZ_YEAR_CGS / 1.0e3
 XZ_CS_CODE = float(XZ_METADATA["hydro"]["sound_speed_code"])
 XZ_RACC_AU = float(XZ_METADATA["virtual_sphere"]["radius_au"]) if XZ_MASK_RACC else 0.0
 XZ_BZ0 = float(XZ_METADATA["magnetic_field"]["initial_bz_microgauss"])
@@ -282,9 +282,9 @@ def xz_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
         r"Plasma $\beta$ and projected magnetic field lines: x-z"
         if XZ_DRAW_FIELDLINES else r"Plasma $\beta$: x-z"
     )
-    time_myr = data["time_code"]*XZ_TIME_UNIT_MYR
+    time_kyr = data["time_code"]*XZ_TIME_UNIT_KYR
     ax.set_title(
-        f"{title}\nstep={step:05d}, t={time_myr:.6e} Myr, "
+        f"{title}\nstep={step:05d}, t={time_kyr:.1f} kyr, "
         f"{range_name}, {XZ_RUN_LABEL}"
     )
     fig.tight_layout()
@@ -375,7 +375,7 @@ def xy_load_metadata(directory):
 XY_METADATA = xy_load_metadata(XY_VTK_DIR)
 XY_UNITS = XY_METADATA["units"]
 XY_LENGTH_UNIT_AU = float(XY_UNITS["length_cgs"]) / XY_AU_CGS
-XY_TIME_UNIT_MYR = float(XY_UNITS["time_cgs"]) / XY_YEAR_CGS / 1.0e6
+XY_TIME_UNIT_KYR = float(XY_UNITS["time_cgs"]) / XY_YEAR_CGS / 1.0e3
 XY_CS_CODE = float(XY_METADATA["hydro"]["sound_speed_code"])
 XY_RACC_AU = float(XY_METADATA["virtual_sphere"]["radius_au"]) if XY_MASK_RACC else 0.0
 XY_BZ0 = float(XY_METADATA["magnetic_field"]["initial_bz_microgauss"])
@@ -595,9 +595,9 @@ def xy_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
         r"Plasma $\beta$ and projected magnetic field lines: x-y"
         if XY_DRAW_FIELDLINES else r"Plasma $\beta$: x-y"
     )
-    time_myr = data["time_code"]*XY_TIME_UNIT_MYR
+    time_kyr = data["time_code"]*XY_TIME_UNIT_KYR
     ax.set_title(
-        f"{title}\nstep={step:05d}, t={time_myr:.6e} Myr, "
+        f"{title}\nstep={step:05d}, t={time_kyr:.1f} kyr, "
         f"{range_name}, {XY_RUN_LABEL}"
     )
     fig.tight_layout()
