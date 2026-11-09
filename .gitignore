@@ -24,3 +24,7 @@ __pycache__/
 # CFCA benchmark logs (20 and 200 steps)
 /cfca-bench71-*.out
 /cfca-bench71-*.err
+
+# CFCA model71 logs
+/cfca-model71-*.out
+/cfca-model71-*.err
