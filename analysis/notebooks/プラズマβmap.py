@@ -25,6 +25,8 @@ XZ_VTK_DIR = Path(os.path.expanduser("~/athena-project/results/○○")).resolve
 XZ_DRAW_FIELDLINES = True
 # True: metadataのracc内のβマップだけを白抜きにする
 XZ_MASK_RACC = True
+# True: 保存済みの画像は上書きせずスキップする
+XZ_SKIP_EXISTING = True
 
 XZ_OUTPUT_ROOT = XZ_VTK_DIR / "xz_plasma_beta_maps"
 XZ_OUTPUT_DIRS = {
@@ -302,15 +304,36 @@ def xz_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
     return output_path
 
 
-XZ_BETA_LIMITS = xz_beta_limits()
-print(f"[XZ] beta range = {XZ_BETA_LIMITS[0]:.6e} -- {XZ_BETA_LIMITS[1]:.6e}")
+XZ_TAG = "with_Blines" if XZ_DRAW_FIELDLINES else "no_Blines"
+XZ_PENDING = []
 for xz_index, xz_step in enumerate(XZ_STEPS, 1):
+    xz_full_file = XZ_OUTPUT_DIRS["full"] / f"xz_plasma_beta_{XZ_TAG}_{xz_step:05d}_full.png"
+    xz_zoom_file = XZ_OUTPUT_DIRS["zoom"] / f"xz_plasma_beta_{XZ_TAG}_{xz_step:05d}_zoom_1over10.png"
+    xz_make_full = not (XZ_SKIP_EXISTING and xz_full_file.is_file())
+    xz_make_zoom = not (XZ_SKIP_EXISTING and xz_zoom_file.is_file())
+    if not xz_make_full:
+        print(f"[XZ SKIP] Existing image: {xz_full_file}")
+    if not xz_make_zoom:
+        print(f"[XZ SKIP] Existing image: {xz_zoom_file}")
+    if xz_make_full or xz_make_zoom:
+        XZ_PENDING.append((xz_index, xz_step, xz_make_full, xz_make_zoom))
+
+if XZ_PENDING:
+    XZ_BETA_LIMITS = xz_beta_limits()
+    print(f"[XZ] beta range = {XZ_BETA_LIMITS[0]:.6e} -- {XZ_BETA_LIMITS[1]:.6e}")
+
+for xz_index, xz_step, xz_make_full, xz_make_zoom in XZ_PENDING:
     print(f"[XZ {xz_index:3d}/{len(XZ_STEPS):3d}] step={xz_step:05d}")
     xz_data = xz_load_slice(xz_step)
-    xz_plot(xz_data, None, XZ_OUTPUT_DIRS["full"], "full", *XZ_BETA_LIMITS)
-    xz_plot(xz_data, XZ_ZOOM_FRACTION, XZ_OUTPUT_DIRS["zoom"], "zoom_1over10", *XZ_BETA_LIMITS)
+    if xz_make_full:
+        xz_plot(xz_data, None, XZ_OUTPUT_DIRS["full"], "full", *XZ_BETA_LIMITS)
+    if xz_make_zoom:
+        xz_plot(xz_data, XZ_ZOOM_FRACTION, XZ_OUTPUT_DIRS["zoom"], "zoom_1over10", *XZ_BETA_LIMITS)
     del xz_data
     gc.collect()
+
+if not XZ_PENDING:
+    print("[XZ] All requested images already exist; nothing to render.")
 
 
 # %% cell 2: x-y平面（このセル単独で実行可）
@@ -320,15 +343,18 @@ from collections import defaultdict
 from pathlib import Path
 import gc
 import json
+import multiprocessing as mp
 import os
 import re
+import traceback
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter, LogLocator
 import numpy as np
 import pyvista as pv
-from scipy.interpolate import griddata
+from scipy.interpolate import LinearNDInterpolator
+from scipy.spatial import Delaunay, cKDTree
 
 
 # -------------------------- ユーザー設定 --------------------------
@@ -339,6 +365,8 @@ XY_PLOT_MODE = "zoom"
 XY_DRAW_FIELDLINES = True
 # True: metadataのracc内のβマップだけを白抜きにする
 XY_MASK_RACC = True
+# True: 保存済みの画像は上書きせずスキップする
+XY_SKIP_EXISTING = True
 
 XY_OUTPUT_ROOT = XY_VTK_DIR / "xy_plasma_beta_maps"
 XY_OUTPUT_DIRS = {"full": XY_OUTPUT_ROOT/"full", "zoom": XY_OUTPUT_ROOT/"zoom_1over10"}
@@ -481,31 +509,6 @@ def xy_beta(rho, magnetic):
     return result
 
 
-def xy_beta_limits():
-    if XY_BETA_VMIN is not None and XY_BETA_VMAX is not None:
-        return float(XY_BETA_VMIN), float(XY_BETA_VMAX)
-    samples = []
-    for index, step in enumerate(XY_STEPS, 1):
-        data = xy_load_slice(step)
-        values = xy_beta(data["rho"], data["B"])
-        values = values[np.isfinite(values) & (values > 0.0)]
-        if values.size:
-            stride = max(1, values.size//20000)
-            samples.append(values[::stride])
-        print(f"[XY SCALE {index:3d}/{len(XY_STEPS):3d}] step={step:05d}")
-        del data, values
-        gc.collect()
-    if not samples:
-        raise RuntimeError("No finite positive plasma beta values")
-    all_values = np.concatenate(samples)
-    automatic_min, automatic_max = np.percentile(all_values, [1.0, 99.0])
-    vmin = automatic_min if XY_BETA_VMIN is None else float(XY_BETA_VMIN)
-    vmax = automatic_max if XY_BETA_VMAX is None else float(XY_BETA_VMAX)
-    if not 0.0 < vmin < vmax:
-        raise ValueError(f"Invalid beta limits: {vmin}, {vmax}")
-    return vmin, vmax
-
-
 def xy_axis_format(ax, bounds):
     largest = max(abs(value) for value in bounds)
     exponent = int(np.floor(np.log10(largest))) if largest > 0.0 else 0
@@ -515,17 +518,6 @@ def xy_axis_format(ax, bounds):
     ax.yaxis.set_major_formatter(formatter)
     ax.set_xlabel(rf"$x\ [10^{{{exponent}}}\ {{\rm AU}}]$")
     ax.set_ylabel(rf"$y\ [10^{{{exponent}}}\ {{\rm AU}}]$")
-
-
-def xy_interpolate(points, values, X, Y):
-    try:
-        result = griddata(points, values, (X, Y), method="linear")
-    except Exception:
-        result = np.full_like(X, np.nan, dtype=float)
-    if np.any(~np.isfinite(result)):
-        nearest = griddata(points, values, (X, Y), method="nearest")
-        result = np.where(np.isfinite(result), result, nearest)
-    return result
 
 
 def xy_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
@@ -553,16 +545,43 @@ def xy_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
     x_axis = np.linspace(xmin, xmax, XY_MAP_N)
     y_axis = np.linspace(ymin, ymax, XY_MAP_N)
     X, Y = np.meshgrid(x_axis, y_axis)
-    points = np.column_stack((x_au[source], y_au[source]))
-    log_beta = xy_interpolate(points, np.log10(beta[source]), X, Y)
-    beta_grid = 10.0**log_beta
+    # β、Bx、Byをまとめて1回のDelaunay分割で補間する。
+    # 磁力線OFF時はβだけを処理し、磁場用格子を作らない。
+    points = np.empty((np.count_nonzero(source), 2), dtype=np.float64)
+    points[:, 0] = x_au[source]
+    points[:, 1] = y_au[source]
+    channel_count = 3 if XY_DRAW_FIELDLINES else 1
+    values = np.empty((points.shape[0], channel_count), dtype=np.float64)
+    values[:, 0] = np.log10(beta[source])
     if XY_DRAW_FIELDLINES:
-        bx_grid = np.nan_to_num(xy_interpolate(points, data["B"][source, 0], X, Y), nan=0.0)
-        by_grid = np.nan_to_num(xy_interpolate(points, data["B"][source, 1], X, Y), nan=0.0)
+        values[:, 1] = data["B"][source, 0]
+        values[:, 2] = data["B"][source, 1]
+
+    triangulation = Delaunay(points)
+    interpolator = LinearNDInterpolator(triangulation, values, fill_value=np.nan)
+    interpolated = interpolator(X, Y)
+
+    # 凸包外の欠損点だけを最近傍値で埋める。
+    missing = ~np.isfinite(interpolated[..., 0])
+    if np.any(missing):
+        tree = cKDTree(points)
+        missing_points = np.column_stack((X[missing], Y[missing]))
+        _, nearest_indices = tree.query(missing_points, k=1)
+        interpolated[missing, :] = values[nearest_indices, :]
+        del tree, missing_points, nearest_indices
+
+    beta_grid = np.power(10.0, interpolated[..., 0])
+    if XY_DRAW_FIELDLINES:
+        bx_grid = np.nan_to_num(interpolated[..., 1].copy(), nan=0.0, posinf=0.0, neginf=0.0)
+        by_grid = np.nan_to_num(interpolated[..., 2].copy(), nan=0.0, posinf=0.0, neginf=0.0)
         has_field = np.any(np.hypot(bx_grid, by_grid) > 0.0)
     else:
         bx_grid = by_grid = None
         has_field = False
+
+    del interpolator, triangulation, interpolated, points, values, missing
+    del x_au, y_au, source
+    gc.collect()
     if XY_MASK_RACC:
         beta_grid = np.ma.masked_where(X*X+Y*Y < XY_RACC_AU**2, beta_grid)
     fig, ax = plt.subplots(figsize=XY_FIGSIZE)
@@ -609,20 +628,142 @@ def xy_plot(data, fraction, output_dir, suffix, beta_vmin, beta_vmax):
     if XY_SHOW_IMAGES:
         plt.show()
     plt.close(fig)
-    del X, Y, beta_grid, log_beta, beta
+    del X, Y, beta_grid, beta
     if bx_grid is not None:
         del bx_grid, by_grid
     return output_path
 
 
-XY_BETA_LIMITS = xy_beta_limits()
-print(f"[XY] beta range = {XY_BETA_LIMITS[0]:.6e} -- {XY_BETA_LIMITS[1]:.6e}")
 XY_FRACTION = None if XY_PLOT_MODE == "full" else XY_ZOOM_FRACTION
 XY_SUFFIX = "full" if XY_PLOT_MODE == "full" else "zoom_1over10"
 XY_OUTPUT_DIR = XY_OUTPUT_DIRS[XY_PLOT_MODE]
-for xy_index, xy_step in enumerate(XY_STEPS, 1):
-    print(f"[XY {xy_index:3d}/{len(XY_STEPS):3d}] step={xy_step:05d}")
-    xy_data = xy_load_slice(xy_step)
-    xy_plot(xy_data, XY_FRACTION, XY_OUTPUT_DIR, XY_SUFFIX, *XY_BETA_LIMITS)
-    del xy_data
-    gc.collect()
+XY_TAG = "with_Blines" if XY_DRAW_FIELDLINES else "no_Blines"
+
+
+def xy_output_path(step):
+    return XY_OUTPUT_DIR / f"xy_plasma_beta_{XY_TAG}_{step:05d}_{XY_SUFFIX}.png"
+
+
+def xy_scale_sample_worker(step, sender):
+    """1時刻のβ標本を子プロセスで計算する。"""
+    data = None
+    try:
+        data = xy_load_slice(step)
+        sample = xy_beta(data["rho"], data["B"])
+        sample = sample[np.isfinite(sample) & (sample > 0.0)]
+        if sample.size:
+            stride = max(1, sample.size//20000)
+            sample = sample[::stride].copy()
+        sender.send({"ok": True, "sample": sample})
+    except BaseException:
+        sender.send({"ok": False, "traceback": traceback.format_exc()})
+        raise
+    finally:
+        if data is not None:
+            del data
+        plt.close("all")
+        gc.collect()
+        sender.close()
+
+
+def xy_plot_worker(step, beta_limits, sender):
+    """1時刻の読み込み・補間・保存を子プロセス内で完結させる。"""
+    data = None
+    try:
+        plt.ioff()
+        data = xy_load_slice(step)
+        output = xy_plot(
+            data, XY_FRACTION, XY_OUTPUT_DIR, XY_SUFFIX, *beta_limits
+        )
+        sender.send({"ok": True, "output": str(output)})
+    except BaseException:
+        sender.send({"ok": False, "traceback": traceback.format_exc()})
+        raise
+    finally:
+        if data is not None:
+            del data
+        plt.close("all")
+        gc.collect()
+        sender.close()
+
+
+def xy_run_child(context, target, arguments, name):
+    """Pipeの結果を受け取り、子プロセスの失敗も検出する。"""
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=target, args=(*arguments, sender), name=name)
+    process.start()
+    sender.close()
+    message = None
+    while process.is_alive():
+        if receiver.poll(0.2):
+            message = receiver.recv()
+            break
+    if message is None and receiver.poll():
+        message = receiver.recv()
+    receiver.close()
+    process.join()
+    exit_code = process.exitcode
+    process.close()
+    if exit_code != 0 or message is None or not message.get("ok", False):
+        detail = message.get("traceback") if message else f"child exit code={exit_code}"
+        raise RuntimeError(f"x-y child process failed.\n{detail}")
+    return message
+
+
+if "fork" not in mp.get_all_start_methods():
+    raise RuntimeError("The memory-isolated x-y renderer requires multiprocessing 'fork'.")
+XY_MP_CONTEXT = mp.get_context("fork")
+
+# 保存済みの画像は、データ読み込みより前に除外する。
+XY_PENDING_STEPS = []
+for xy_step in XY_STEPS:
+    xy_file = xy_output_path(xy_step)
+    if XY_SKIP_EXISTING and xy_file.is_file():
+        print(f"[XY SKIP] Existing image: {xy_file}")
+    else:
+        XY_PENDING_STEPS.append(xy_step)
+
+if XY_PENDING_STEPS:
+    if XY_BETA_VMIN is not None and XY_BETA_VMAX is not None:
+        XY_BETA_LIMITS = (float(XY_BETA_VMIN), float(XY_BETA_VMAX))
+    else:
+        xy_samples = []
+        for xy_index, xy_step in enumerate(XY_STEPS, 1):
+            message = xy_run_child(
+                XY_MP_CONTEXT, xy_scale_sample_worker, (xy_step,),
+                f"xy-beta-scale-{xy_step:05d}",
+            )
+            sample = message["sample"]
+            if sample.size:
+                xy_samples.append(sample)
+            print(f"[XY SCALE {xy_index:3d}/{len(XY_STEPS):3d}] step={xy_step:05d}")
+        if not xy_samples:
+            raise RuntimeError("No finite positive plasma beta values")
+        xy_all_samples = np.concatenate(xy_samples)
+        xy_auto_min, xy_auto_max = np.percentile(xy_all_samples, [1.0, 99.0])
+        XY_BETA_LIMITS = (
+            xy_auto_min if XY_BETA_VMIN is None else float(XY_BETA_VMIN),
+            xy_auto_max if XY_BETA_VMAX is None else float(XY_BETA_VMAX),
+        )
+        del xy_samples, xy_all_samples
+        gc.collect()
+    if not 0.0 < XY_BETA_LIMITS[0] < XY_BETA_LIMITS[1]:
+        raise ValueError(f"Invalid beta limits: {XY_BETA_LIMITS}")
+    print(f"[XY] beta range = {XY_BETA_LIMITS[0]:.6e} -- {XY_BETA_LIMITS[1]:.6e}")
+
+    for xy_index, xy_step in enumerate(XY_PENDING_STEPS, 1):
+        print(
+            f"[XY SPAWN {xy_index:3d}/{len(XY_PENDING_STEPS):3d}] "
+            f"step={xy_step:05d}, mode={XY_PLOT_MODE}", flush=True,
+        )
+        xy_run_child(
+            XY_MP_CONTEXT, xy_plot_worker, (xy_step, XY_BETA_LIMITS),
+            f"xy-beta-plot-{xy_step:05d}",
+        )
+        print(
+            f"[XY CHILD EXIT] step={xy_step:05d}; per-step native memory released",
+            flush=True,
+        )
+        gc.collect()
+else:
+    print("[XY] All requested images already exist; nothing to render.")
