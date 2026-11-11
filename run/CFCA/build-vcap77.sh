@@ -20,5 +20,5 @@ cd "${BUNDLE}/source"
 } > "${BUNDLE}/build-info.txt" 2>&1
 JOBS="${SLURM_CPUS_PER_TASK}" bash scripts/build/cfca.sh
 cp bin/athena "${BUNDLE}/athena"
-"${BUNDLE}/athena" -c >> "${BUNDLE}/build-info.txt" 2>&1
+srun --ntasks=1 "${BUNDLE}/athena" -c >> "${BUNDLE}/build-info.txt" 2>&1
 (cd "${BUNDLE}" && sha256sum athena > executable.sha256)
