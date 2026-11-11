@@ -14,12 +14,12 @@ problem_id = Toyouchi    # problem ID: basename of output filenames
 
 <output1>
 file_type  = hst        # History data dump
-dt         = 0.2 # code time [kyr]
+dt         = 0.2        # code time [kyr]
 
 <output2>
 file_type  = vtk        # Binary data dump
 variable   = prim,gr_nfw,gr_star,gself_x,gself_y,gself_z,apres_x,apres_y,apres_z,amag_x,amag_y,amag_z       # variables to be output
-dt = 2.0  # VTK: 2000 yr
+dt         = 0.2        # code time [kyr]
 ghost_zones= false
 
 <output3>
@@ -28,8 +28,8 @@ dt        = 10.032353537658 # code time [kyr]
 
 <time>
 cfl_number = 0.3        # The Courant, Friedrichs, & Lewy (CFL) Number
-nlim = -1  # ステップ数による制限なし
-tlim = 1000.0  # 1 Myr
+nlim       = -1         # -1は無制限
+tlim       = 20.0       # code time [kyr]
 integrator  = vl2       # time integration algorithm
 xorder      = 2         # order of spatial reconstruction
 ncycle_out  = 1         # interval for stdout summary info
@@ -62,7 +62,7 @@ x2min = -20.206838411905
 x2max =  20.206838411905
 x3min = -20.206838411905
 x3max =  20.206838411905
-level = 5
+level = 5                 # SMRレベルを選ぶと、自動でracc = ε = 2dxminとなる
 
 
 <meshblock>
@@ -91,10 +91,18 @@ ox3_bc          = multipole
 # Wise19 central velocity continuation
 vr_taper_au = 580.0
 
+# Wise19 Menc_profile factor
+fM = 1.0  # 初期ガス質量・密度の倍率。省略時は1.0
+
 # 初期密度へのWhite noise
 use_density_noise     = true
 density_noise_percent = 1.0
 density_noise_seed    = 42  # ゆらぎのパターンを決める番号
+
+# 速度上限
+use_velocity_ceiling = true
+velocity_ceiling_kms = 1000.0
+velocity_ceiling_diagnostics = true
 
 mstar_init          = 100  # 固定中心星質量(code mass = 1 Msun; no accretion update)
 use_central_gravity = true

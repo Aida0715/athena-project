@@ -25,6 +25,6 @@ __pycache__/
 /cfca-bench71-*.out
 /cfca-bench71-*.err
 
-# CFCA model71 logs
-/cfca-model71-*.out
-/cfca-model71-*.err
+# CFCA velocity ceiling comparison logs
+/cfca-vcap77-*.out
+/cfca-vcap77-*.err
