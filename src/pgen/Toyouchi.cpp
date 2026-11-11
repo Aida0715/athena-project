@@ -55,6 +55,11 @@ Real SphereHistory(MeshBlock *pmb, int iout);
 namespace {
 // with functions A1,2,3 which compute vector potentials
 Real cs2, gam, gm1, gconst;
+// Experimental velocity ceiling; diagnostics are deliberately separate from HST/restart.
+bool use_velocity_ceiling = false;
+bool velocity_ceiling_diagnostics = false;
+Real velocity_ceiling_code = 0.0;
+void ApplyVelocityCeiling(Mesh *pm);
 
 // 初期密度ノイズ
 bool use_density_noise = false;
@@ -525,6 +530,27 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
               << " racc=" << racc*Lunit/AU << " AU" << std::endl;
   }
 
+
+  use_velocity_ceiling = pin->GetOrAddBoolean("problem", "use_velocity_ceiling", false);
+  velocity_ceiling_diagnostics = pin->GetOrAddBoolean(
+      "problem", "velocity_ceiling_diagnostics", use_velocity_ceiling);
+  const Real ceiling_kms = pin->GetOrAddReal("problem", "velocity_ceiling_kms", 300.0);
+  if (!std::isfinite(ceiling_kms) || ceiling_kms <= 0.0) {
+    std::stringstream msg;
+    msg << "problem/velocity_ceiling_kms must be finite and positive.";
+    ATHENA_ERROR(msg);
+  }
+  velocity_ceiling_code = ceiling_kms*1.0e5/Vunit;
+  if (use_velocity_ceiling && (NON_BAROTROPIC_EOS || RELATIVISTIC_DYNAMICS || adaptive)) {
+    std::stringstream msg;
+    msg << "Toyouchi velocity ceiling supports Newtonian isothermal static meshes only.";
+    ATHENA_ERROR(msg);
+  }
+  if (Globals::my_rank == 0) {
+    std::cout << "Velocity ceiling: enabled=" << use_velocity_ceiling
+              << " limit=" << ceiling_kms << " km/s diagnostics="
+              << velocity_ceiling_diagnostics << std::endl;
+  }
 
   // ===== 初期密度ノイズの設定 =====
   use_density_noise =
@@ -997,6 +1023,7 @@ Real SphereHistory(MeshBlock *pmb, int iout) {
 }
 
 void Mesh::UserWorkInLoop() {
+  ApplyVelocityCeiling(this);
   Real rates[2] = {0.0,0.0};
   for (int b=0; b<nblocal; ++b) {
     Real in, out;
@@ -1021,3 +1048,111 @@ void Mesh::UserWorkInLoop() {
               << " Msun (gravity fixed)" << std::endl;
   }
 }
+
+// BEGIN temporary velocity-ceiling experiment diagnostics.
+namespace {
+void ApplyVelocityCeiling(Mesh *pm) {
+  if (!use_velocity_ceiling && !velocity_ceiling_diagnostics) return;
+  // Sums: cells, clipped cells, total mass, clipped mass, removed KE,
+  // removed momentum xyz, removed angular momentum xyz, mass*speed before/after.
+  Real sums[13] = {};
+  Real peaks[2] = {};
+  for (int b=0; b<pm->nblocal; ++b) {
+    MeshBlock *mb = pm->my_blocks(b);
+    AthenaArray<Real> &w = mb->phydro->w;
+    AthenaArray<Real> &u = mb->phydro->u;
+    for (int k=mb->ks; k<=mb->ke; ++k) {
+      for (int j=mb->js; j<=mb->je; ++j) {
+        for (int i=mb->is; i<=mb->ie; ++i) {
+          const Real rho = u(IDN,k,j,i);
+          Real v[3] = {w(IVX,k,j,i), w(IVY,k,j,i), w(IVZ,k,j,i)};
+          const Real speed = std::hypot(std::hypot(v[0],v[1]),v[2]);
+          if (!(std::isfinite(rho) && rho>0.0 && std::isfinite(speed))) {
+            std::stringstream msg;
+            msg << "Velocity ceiling encountered invalid density/velocity, gid=" << mb->gid;
+            ATHENA_ERROR(msg);
+          }
+          const Real mass = rho*mb->pcoord->GetCellVolume(k,j,i);
+          const bool clip = use_velocity_ceiling && speed>velocity_ceiling_code;
+          const Real factor = clip ? velocity_ceiling_code/speed : 1.0;
+          const Real after = speed*factor;
+          sums[0] += 1.0;
+          sums[2] += mass;
+          sums[11] += mass*speed;
+          sums[12] += mass*after;
+          peaks[0] = std::max(peaks[0],speed);
+          peaks[1] = std::max(peaks[1],after);
+          if (clip) {
+            sums[1] += 1.0;
+            sums[3] += mass;
+            sums[4] += 0.5*mass*(speed-after)*(speed+after);
+            Real dp[3];
+            for (int d=0; d<3; ++d) {
+              // Use conserved momentum to account for the actual numerical correction.
+              const Real old_momentum = u(IM1+d,k,j,i);
+              w(IVX+d,k,j,i) = v[d]*factor;
+              u(IM1+d,k,j,i) = rho*w(IVX+d,k,j,i);
+              dp[d] = (old_momentum-u(IM1+d,k,j,i))*mass/rho;
+              sums[5+d] += dp[d];
+            }
+            const Real x=mb->pcoord->x1v(i), y=mb->pcoord->x2v(j), z=mb->pcoord->x3v(k);
+            sums[8] += y*dp[2]-z*dp[1];
+            sums[9] += z*dp[0]-x*dp[2];
+            sums[10] += x*dp[1]-y*dp[0];
+          }
+        }
+      }
+    }
+    if (use_velocity_ceiling) {
+      // Boundary exchange has already happened. Limit primitive ghost velocities too,
+      // so next-stage reconstruction and sphere diagnostics see bounded velocities.
+      // Ghost cells are excluded from all mass/energy accounting.
+      for (int k=mb->ks-NGHOST; k<=mb->ke+NGHOST; ++k)
+        for (int j=mb->js-NGHOST; j<=mb->je+NGHOST; ++j)
+          for (int i=mb->is-NGHOST; i<=mb->ie+NGHOST; ++i) {
+            if (i>=mb->is && i<=mb->ie && j>=mb->js && j<=mb->je
+                && k>=mb->ks && k<=mb->ke) continue;
+            const Real speed=std::hypot(std::hypot(w(IVX,k,j,i),w(IVY,k,j,i)),w(IVZ,k,j,i));
+            if (speed>velocity_ceiling_code && std::isfinite(speed))
+              for (int d=0; d<3; ++d) w(IVX+d,k,j,i)*=velocity_ceiling_code/speed;
+          }
+      // The task list computed dt before this mesh hook. Recompute from capped state.
+      mb->phydro->NewBlockTimeStep();
+    }
+  }
+  if (!velocity_ceiling_diagnostics) return;
+#ifdef MPI_PARALLEL
+  MPI_Allreduce(MPI_IN_PLACE,sums,13,MPI_ATHENA_REAL,MPI_SUM,MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE,peaks,2,MPI_ATHENA_REAL,MPI_MAX,MPI_COMM_WORLD);
+#endif
+  if (Globals::my_rank != 0) return;
+  // Append on restart; rows describe this step only (not cumulative/unique gas).
+  const char *filename="Toyouchi.velocity_ceiling.csv";
+  std::ifstream existing(filename);
+  const bool header=existing.peek()==std::ifstream::traits_type::eof();
+  existing.close();
+  std::ofstream out(filename,std::ios::app);
+  out << std::setprecision(17);
+  if (header)
+    out << "cycle,time_yr,dt_yr,enabled,limit_kms,cells,clipped_cells,gas_mass_msun,"
+        << "clipped_mass_msun,removed_ke_erg,removed_px_g_cm_s,removed_py_g_cm_s,"
+        << "removed_pz_g_cm_s,removed_lx_g_cm2_s,removed_ly_g_cm2_s,removed_lz_g_cm2_s,"
+        << "max_before_kms,max_after_kms,mass_mean_before_kms,mass_mean_after_kms\n";
+  out << pm->ncycle+1 << ',' << (pm->time+pm->dt)*Tunit/31557600.0
+      << ',' << pm->dt*Tunit/31557600.0 << ',' << use_velocity_ceiling
+      << ',' << velocity_ceiling_code*Vunit/1.e5 << ',' << sums[0] << ',' << sums[1]
+      << ',' << sums[2]*Munit/Msun << ',' << sums[3]*Munit/Msun
+      << ',' << sums[4]*Munit*Vunit*Vunit;
+  for (int d=5; d<8; ++d) out << ',' << sums[d]*Munit*Vunit;
+  for (int d=8; d<11; ++d) out << ',' << sums[d]*Munit*Lunit*Vunit;
+  out << ',' << peaks[0]*Vunit/1.e5 << ',' << peaks[1]*Vunit/1.e5
+      << ',' << sums[11]/sums[2]*Vunit/1.e5 << ',' << sums[12]/sums[2]*Vunit/1.e5 << '\n';
+  out.close();
+  if (!out) {
+    std::stringstream msg;
+    msg << "Cannot write " << filename;
+    ATHENA_ERROR(msg);
+  }
+}
+} // namespace
+// END temporary velocity-ceiling experiment diagnostics.
