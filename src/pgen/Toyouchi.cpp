@@ -20,6 +20,8 @@
 #include <vector>     // 追加
 #include <utility>    // 追加
 #include <cstdint>    // white noise
+#include <mutex>
+#include <limits>
 
 // Athena++ headers
 #include "../athena.hpp"
@@ -192,6 +194,9 @@ extern const Real velocity_coeff[8];
 extern Real bz_microgauss;
 extern Real bz_code;
 extern Real Bunit;
+Real initial_plasma_beta = 0.0;
+Real initial_mean_pressure = 0.0;
+std::once_flag initial_field_once;
 bool metadata_written = false;
 
 std::string JsonEscape(const std::string &input) {
@@ -218,7 +223,7 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
   const std::string problem_id = pin->GetString("job", "problem_id");
   const std::string filename = problem_id + ".metadata.json";
   const std::string temporary = filename + ".tmp";
-  const Real sound_speed_code = sound_speed_kms * 1.0e5 / Vunit;
+  const Real sound_speed_code = pin->GetReal("hydro", "iso_sound_speed");
   const Real density_floor_code = pin->GetReal("hydro", "dfloor");
   const Real cfl_number = pin->GetReal("time", "cfl_number");
   const Real gamma_input = pin->GetReal("hydro", "gamma");
@@ -307,6 +312,11 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "  },\n"
       << "  \"magnetic_field\": {\n"
       << "    \"enabled_at_compile_time\": " << JsonBool(MAGNETIC_FIELDS_ENABLED) << ",\n"
+      << "    \"initial_plasma_beta\": " << initial_plasma_beta << ",\n"
+      << "    \"beta_definition\": \"volume-mean initial gas pressure / uniform magnetic pressure; active SMR leaves, fM, noise and EOS density floor included\",\n"
+      << "    \"initial_mean_pressure_code\": " << initial_mean_pressure << ",\n"
+      << "    \"initial_mean_pressure_cgs\": " << initial_mean_pressure*pressure_unit << ",\n"
+      << "    \"vtk_magnetic_diagnostics\": \"plasma_beta dimensionless (infinity at zero B); magnetic_pressure in code pressure; alfven_speed in code velocity\",\n"
       << "    \"initial_bz_microgauss\": " << bz_microgauss << ",\n"
       << "    \"initial_bz_code\": " << bz_code << ",\n"
       << "    \"initial_bz_gauss\": " << bz_microgauss*1.0e-6 << ",\n"
@@ -352,7 +362,7 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
 }
 
 // ===== magnetic field =====
-Real bz_microgauss = 0.0;  // input value [microgauss]
+Real bz_microgauss = 0.0;  // derived uniform field [microgauss]
 Real bz_code = 0.0;        // Athena++へ実際に渡す無次元磁場(z方向)
 Real Bunit = 0.0;          // magnetic-field unit [Gauss]
 
@@ -409,6 +419,91 @@ Real RhoMMHCode(Real r_code) {
   const Real x = std::log10(std::min(r_au, fit_rmax_au));
   return Msun/(4.0*M_PI*AU*AU*AU*Rhounit)
       * std::pow(10.0, EvalMencLog10(x)-3.0*x)*EvalMencDerivative(x);
+}
+
+// The same gas profile and deterministic perturbation are used in both passes.
+Real InitialDensity(Real r, const LogicalLocation &loc, const RegionSize &bs,
+                    int i, int j, int k, int root_level) {
+  Real rho = fM * RhoMMHCode(r);
+  if (use_density_noise && density_noise_percent > 0.0) {
+    const Real noise = DensityNoiseValue(
+        static_cast<std::uint64_t>(loc.lx1)*bs.nx1+i,
+        static_cast<std::uint64_t>(loc.lx2)*bs.nx2+j,
+        static_cast<std::uint64_t>(loc.lx3)*bs.nx3+k, loc.level-root_level);
+    rho *= 1.0 + 0.01*density_noise_percent*noise;
+  }
+  return rho;
+}
+
+// Run once per process before any field initialization. Traverse the globally
+// replicated leaf list, avoiding MPI collectives inside the OpenMP block loop.
+// Only active leaves are counted; covered coarse cells and ghosts are excluded.
+void NormalizeInitialField(Mesh *pm, ParameterInput *pin, const RegionSize &shape,
+                           const LogicalLocation *locations, int root_level,
+                           const MeshGenFunc *generators) {
+  const RegionSize &ms = pm->mesh_size;
+  const Real center[3] = {0.5*(ms.x1min+ms.x1max),
+                          0.5*(ms.x2min+ms.x2max), 0.5*(ms.x3min+ms.x3max)};
+  const Real floor = pin->GetReal("hydro", "dfloor");
+  long double pressure_volume = 0.0L, volume = 0.0L;
+  for (int n=0; n<pm->nbtotal; ++n) {
+    const LogicalLocation loc = locations[n];
+    RegionSize bs = shape;
+    BoundaryFlag bcs[6];
+    pm->SetBlockSizeAndBoundaries(loc, bs, bcs);
+    const int count[3] = {bs.nx1, bs.nx2, bs.nx3};
+    const std::int64_t offset[3] = {loc.lx1*bs.nx1, loc.lx2*bs.nx2, loc.lx3*bs.nx3};
+    const int root_count[3] = {ms.nx1, ms.nx2, ms.nx3};
+    const Real lo[3] = {bs.x1min, bs.x2min, bs.x3min};
+    const Real hi[3] = {bs.x1max, bs.x2max, bs.x3max};
+    std::vector<Real> centers[3];
+    Real dv = 1.0;
+    for (int d=0; d<3; ++d) {
+      dv *= (hi[d]-lo[d])/count[d];
+      const std::int64_t total = static_cast<std::int64_t>(root_count[d])
+                                << (loc.level-root_level);
+      std::vector<Real> faces(count[d]+1);
+      for (int q=0; q<=count[d]; ++q) {
+        faces[q] = generators[d](
+            ComputeMeshGeneratorX(offset[d]+q, total, true), ms);
+      }
+      faces.front() = lo[d];
+      faces.back() = hi[d];
+      centers[d].resize(count[d]);
+      for (int q=0; q<count[d]; ++q)
+        centers[d][q] = 0.5*(faces[q]+faces[q+1])-center[d];
+    }
+    for (int k=0; k<bs.nx3; ++k)
+      for (int j=0; j<bs.nx2; ++j)
+        for (int i=0; i<bs.nx1; ++i) {
+          const Real x=centers[0][i], y=centers[1][j], z=centers[2][k];
+          const Real rho = std::max(floor, InitialDensity(
+              std::sqrt(x*x+y*y+z*z), loc, bs, i,j,k,root_level));
+          pressure_volume += static_cast<long double>(rho)*cs2*dv;
+          volume += dv;
+        }
+  }
+  initial_mean_pressure = static_cast<Real>(pressure_volume/volume);
+  bz_code = std::sqrt(2.0*initial_mean_pressure/initial_plasma_beta);
+  bz_microgauss = bz_code*Bunit*1.0e6;
+  if (!(std::isfinite(bz_microgauss) && bz_code > 0.0
+        && std::isfinite(bz_code*bz_code) && bz_code*bz_code > 0.0)) {
+    std::stringstream msg;
+    msg << "Invalid initial magnetic normalization: check plasma_beta and gas pressure.";
+    ATHENA_ERROR(msg);
+  }
+  // SetReal formats with only six significant digits; preserve restart precision.
+  std::ostringstream saved_pressure, saved_beta;
+  saved_pressure << std::setprecision(std::numeric_limits<Real>::max_digits10)
+                 << initial_mean_pressure;
+  saved_beta << std::setprecision(std::numeric_limits<Real>::max_digits10)
+             << initial_plasma_beta;
+  pin->SetString("problem", "initial_mean_pressure_code", saved_pressure.str());
+  pin->SetString("problem", "initial_plasma_beta", saved_beta.str());
+  if (Globals::my_rank == 0)
+    std::cout << "Initial volume-mean plasma beta=" << initial_plasma_beta
+              << "; mean gas pressure=" << initial_mean_pressure
+              << "; uniform Bz=" << bz_microgauss << " microgauss" << std::endl;
 }
 
 Real VrMMHCode(Real r_code) {
@@ -629,23 +724,31 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   use_radial_inflow = pin->GetOrAddBoolean("problem", "use_radial_inflow", true);
   use_rotation = pin->GetOrAddBoolean("problem","use_rotation",true);
 
-  //磁場の強さを入力ファイルから読み込む(μG単位)
-  bz_microgauss = pin->GetOrAddReal("problem", "bz_microgauss", 0.0);
-
-  // CGS→コード単位の変換基準
+  // beta = volume-mean initial gas pressure / uniform magnetic pressure.
+  initial_plasma_beta = pin->GetReal("problem", "plasma_beta");
+  if (!std::isfinite(initial_plasma_beta) || initial_plasma_beta <= 0.0
+      || !MAGNETIC_FIELDS_ENABLED || NON_BAROTROPIC_EOS) {
+    std::stringstream msg;
+    msg << "Toyouchi plasma_beta must be finite and positive; requires isothermal MHD.";
+    ATHENA_ERROR(msg);
+  }
+  if (pin->DoesParameterExist("problem", "bz_microgauss")) {
+    std::stringstream msg;
+    msg << "Replace problem/bz_microgauss with problem/plasma_beta.";
+    ATHENA_ERROR(msg);
+  }
   Bunit = punit->code_magneticfield_cgs;
-
-  // 磁場をCGS→コード単位へ変換
-  Real bz_phys = bz_microgauss * 1.0e-6;  // μG→Gaussに変換
-  bz_code = bz_phys / Bunit;
-
-  // 磁場関連のメッセージ表示
-  if (Globals::my_rank == 0) {
-    std::cout
-        << "Initial vertical magnetic field:" << std::endl
-        << "  Bz physical = " << bz_microgauss << " microgauss" << std::endl
-        << "  B unit      = " << Bunit << " Gauss" << std::endl
-        << "  Bz code     = " << bz_code << std::endl;
+  // Restart files retain the original normalization. Never normalize evolved B.
+  if (pin->DoesParameterExist("problem", "initial_mean_pressure_code")) {
+    initial_mean_pressure = pin->GetReal("problem", "initial_mean_pressure_code");
+    if (!(std::isfinite(initial_mean_pressure) && initial_mean_pressure > 0.0)
+        || pin->GetReal("problem", "initial_plasma_beta") != initial_plasma_beta) {
+      std::stringstream msg;
+      msg << "Invalid saved magnetic normalization or changed plasma_beta on restart.";
+      ATHENA_ERROR(msg);
+    }
+    bz_code = std::sqrt(2.0 * initial_mean_pressure / initial_plasma_beta);
+    bz_microgauss = bz_code * Bunit * 1.0e6;
   }
 
   // Units が CGS 定数から換算した重力定数を自己重力にも使用
@@ -664,7 +767,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   // 中心星・NFWの動径加速度に加え、力の釣り合いを解析するための
   // 自己重力・圧力勾配・Lorentz加速度のCartesian 3成分を出力する。
-  AllocateUserOutputVariables(11);
+  AllocateUserOutputVariables(14);
   SetUserOutputVariableName(0, "gr_star");  // 中心星の動径重力加速度
   SetUserOutputVariableName(1, "gr_nfw");   // NFW haloの動径重力加速度
   SetUserOutputVariableName(2, "gself_x");  // 自己重力加速度x成分
@@ -675,10 +778,17 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   SetUserOutputVariableName(7, "apres_z");  // 圧力勾配加速度z成分
   SetUserOutputVariableName(8, "amag_x");   // Lorentz加速度x成分
   SetUserOutputVariableName(9, "amag_y");   // Lorentz加速度y成分
+  SetUserOutputVariableName(11, "plasma_beta");
+  SetUserOutputVariableName(12, "magnetic_pressure");  // code pressure
+  SetUserOutputVariableName(13, "alfven_speed");      // code velocity
   SetUserOutputVariableName(10, "amag_z");  // Lorentz加速度z成分
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  std::call_once(initial_field_once, [this, pin]() {
+    NormalizeInitialField(pmy_mesh, pin, block_size, pmy_mesh->loclist,
+                          pmy_mesh->root_level, pmy_mesh->MeshGenerator_);
+  });
   // Determine mesh center (default sphere center)
   // 計算領域が原点対称なので、これらは原点になる
   Real x0 = 0.5*(pmy_mesh->mesh_size.x1min + pmy_mesh->mesh_size.x1max);
@@ -696,40 +806,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 	Real z = pcoord->x3v(k) - z0;
 	Real r_sph = std::sqrt(x*x + y*y +z*z);
 
-        // Scale the whole original profile, including core and outer continuation.
-        // EOS density floor remains unchanged; noise is applied multiplicatively.
-        Real rho_final = fM * RhoMMHCode(r_sph);
+        const Real rho_final = InitialDensity(r_sph, loc, block_size,
+                                              i-is, j-js, k-ks, pmy_mesh->root_level);
         Real P_final;
-
-        // Optional cell-wise density perturbation, including the central gas.
-        if (use_density_noise && density_noise_percent > 0.0) {
-
-         // この解像度レベルにおける領域全体のセル番号。
-         // ローカルなi,j,kだけを使わず、ブロック位置も反映する。
-         const std::uint64_t ix =
-             static_cast<std::uint64_t>(loc.lx1)
-             * static_cast<std::uint64_t>(block_size.nx1)
-             + static_cast<std::uint64_t>(i - is);
-
-         const std::uint64_t iy =
-             static_cast<std::uint64_t>(loc.lx2)
-             * static_cast<std::uint64_t>(block_size.nx2)
-             + static_cast<std::uint64_t>(j - js);
-
-         const std::uint64_t iz =
-             static_cast<std::uint64_t>(loc.lx3)
-             * static_cast<std::uint64_t>(block_size.nx3)
-             + static_cast<std::uint64_t>(k - ks);
-
-         const int refinement_level =
-             loc.level - pmy_mesh->root_level;
-
-         const Real noise =
-             DensityNoiseValue(ix, iy, iz, refinement_level);
-
-         rho_final *=
-             1.0 + 0.01 * density_noise_percent * noise;
-       }
 
         P_final = rho_final * cs * cs;
 
@@ -737,7 +816,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         // user output variablesを初期化する。
         // 力の診断量はUserWorkBeforeOutput()で出力直前に更新する。
-        for (int n = 0; n < 11; ++n) {
+        for (int n = 0; n < 14; ++n) {
           user_out_var(n,k,j,i) = 0.0;
         }
 
@@ -986,6 +1065,12 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
         const Real bx = bcc(IB1,k,j,i);
         const Real by = bcc(IB2,k,j,i);
         const Real bz = bcc(IB3,k,j,i);
+
+        const Real b2 = bx*bx + by*by + bz*bz;
+        user_out_var(11,k,j,i) = b2 > 0.0 ? 2.0*cs2*rho/b2
+            : std::numeric_limits<Real>::infinity();
+        user_out_var(12,k,j,i) = 0.5*b2;
+        user_out_var(13,k,j,i) = std::sqrt(b2/rho);
 
         const Real dbz_dy = (bcc(IB3,k,j+1,i)-bcc(IB3,k,j-1,i))/dy;
         const Real dby_dz = (bcc(IB2,k+1,j,i)-bcc(IB2,k-1,j,i))/dz;
