@@ -68,7 +68,15 @@ XZ_CS_CODE = float(XZ_METADATA["hydro"]["sound_speed_code"])
 XZ_RACC_AU = float(XZ_METADATA["virtual_sphere"]["radius_au"]) if XZ_MASK_RACC else 0.0
 XZ_BZ0 = float(XZ_METADATA["magnetic_field"]["initial_bz_microgauss"])
 XZ_FM = float(XZ_METADATA["initial_conditions"]["fM"])
-XZ_RUN_LABEL = rf"$B_{{z0}}={XZ_BZ0:g}\,\mu{{\rm G}}$, $f_M={XZ_FM:g}$"
+XZ_INITIAL_BETA = XZ_METADATA["magnetic_field"].get("initial_plasma_beta")
+if XZ_INITIAL_BETA is not None:
+    XZ_INITIAL_BETA = float(XZ_INITIAL_BETA)
+    XZ_RUN_LABEL = (
+        rf"$\beta_0={XZ_INITIAL_BETA:g}$, "
+        rf"$B_{{z0}}={XZ_BZ0:g}\,\mu{{\rm G}}$, $f_M={XZ_FM:g}$"
+    )
+else:
+    XZ_RUN_LABEL = rf"$B_{{z0}}={XZ_BZ0:g}\,\mu{{\rm G}}$, $f_M={XZ_FM:g}$"
 
 for xz_directory in XZ_OUTPUT_DIRS.values():
     xz_directory.mkdir(parents=True, exist_ok=True)
@@ -408,7 +416,15 @@ XY_CS_CODE = float(XY_METADATA["hydro"]["sound_speed_code"])
 XY_RACC_AU = float(XY_METADATA["virtual_sphere"]["radius_au"]) if XY_MASK_RACC else 0.0
 XY_BZ0 = float(XY_METADATA["magnetic_field"]["initial_bz_microgauss"])
 XY_FM = float(XY_METADATA["initial_conditions"]["fM"])
-XY_RUN_LABEL = rf"$B_{{z0}}={XY_BZ0:g}\,\mu{{\rm G}}$, $f_M={XY_FM:g}$"
+XY_INITIAL_BETA = XY_METADATA["magnetic_field"].get("initial_plasma_beta")
+if XY_INITIAL_BETA is not None:
+    XY_INITIAL_BETA = float(XY_INITIAL_BETA)
+    XY_RUN_LABEL = (
+        rf"$\beta_0={XY_INITIAL_BETA:g}$, "
+        rf"$B_{{z0}}={XY_BZ0:g}\,\mu{{\rm G}}$, $f_M={XY_FM:g}$"
+    )
+else:
+    XY_RUN_LABEL = rf"$B_{{z0}}={XY_BZ0:g}\,\mu{{\rm G}}$, $f_M={XY_FM:g}$"
 for xy_directory in XY_OUTPUT_DIRS.values():
     xy_directory.mkdir(parents=True, exist_ok=True)
 if not XY_VTK_DIR.is_dir():

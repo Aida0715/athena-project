@@ -29,7 +29,7 @@ except ModuleNotFoundError:
 # curve_name2 = r"$B_{z,0}=1\times10^{-19}\ \mu{\rm G}$"
 # ============================================================
 datadir1 = "~/athena-project/results/○○"
-curve_name1 = r"$B_{z0}=3\times10^{-20}\ \mu{\rm G}$"
+curve_name1 = fr"$beta_{0}=〇〇$"
 
 
 # 以下は通常変更不要

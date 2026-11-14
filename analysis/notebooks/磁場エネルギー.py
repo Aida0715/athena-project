@@ -29,10 +29,10 @@ except ModuleNotFoundError:
 #
 # 2本目以降は、次の2行を番号を増やして追記するだけでよい。
 # datadir2 = "~/athena-project/results/○○"
-# curve_name2 = r"$B_{z,0}=1\times10^{-1}\ \mu{\rm G}$"
+# curve_name2 = None  # NoneならJSONのβ0と算出済みBz0から自動作成
 # ============================================================
 datadir1 = "~/athena-project/results/○○"
-curve_name1 = r"$B_{z0}=3\times10^{-2}\ \mu{\rm G}$"
+curve_name1 = None
 
 
 # 以下は通常変更不要
@@ -74,10 +74,27 @@ def collect_datasets(namespace):
                 f"[{datadir_key}] Directory does not exist: {directory}"
             )
 
+        metadata = load_toyouchi_metadata(directory)
+        configured_name = namespace[curve_name_key]
+        if configured_name is None:
+            magnetic = metadata["magnetic_field"]
+            bz0 = float(magnetic["initial_bz_microgauss"])
+            beta0 = magnetic.get("initial_plasma_beta")
+            if beta0 is None:
+                curve_name = rf"$B_{{z0}}={bz0:g}\ \mu{{\rm G}}$"
+            else:
+                curve_name = (
+                    rf"$\beta_0={float(beta0):g}$ "
+                    rf"($B_{{z0}}={bz0:g}\ \mu{{\rm G}}$)"
+                )
+        else:
+            curve_name = str(configured_name)
+
         datasets.append({
             "number": number,
             "datadir": directory,
-            "curve_name": str(namespace[curve_name_key]),
+            "curve_name": curve_name,
+            "metadata": metadata,
         })
     return datasets
 
@@ -165,7 +182,7 @@ def block_magnetic_energy_erg(filename):
 # ============================================================
 def analyze_dataset(dataset):
     global MAGNETIC_ENERGY_UNIT_ERG
-    units = run_units(load_toyouchi_metadata(dataset["datadir"]))
+    units = run_units(dataset["metadata"])
     time_unit_kyr = units["time_cgs"] / (1.0e3 * YEAR_CGS)
     MAGNETIC_ENERGY_UNIT_ERG = units["pressure_cgs"] * units["length_cgs"]**3
     directory = dataset["datadir"]

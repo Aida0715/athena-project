@@ -120,7 +120,16 @@ YEAR = 365.25 * 24.0 * 3600.0
 RACC_AU = float(metadata["virtual_sphere"]["radius_au"]) if mask_racc_xz else 0.0
 BZ0_MICROGAUSS = float(metadata["magnetic_field"]["initial_bz_microgauss"])
 FM_VALUE = float(metadata["initial_conditions"]["fM"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
+INITIAL_PLASMA_BETA = metadata["magnetic_field"].get("initial_plasma_beta")
+if INITIAL_PLASMA_BETA is not None:
+    INITIAL_PLASMA_BETA = float(INITIAL_PLASMA_BETA)
+    BZ0_LABEL = (
+        rf"$\beta_0={INITIAL_PLASMA_BETA:g}$, "
+        rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
+    )
+else:
+    # bz_microgaussを直接与えていた旧形式のmetadataとの互換性。
+    BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
 
 print("\n=== Code units ===")
 print(f"Lunit   = {Lunit:.6e} cm")
@@ -1318,7 +1327,16 @@ YEAR = 3.15576e7
 RACC_AU = float(metadata["virtual_sphere"]["radius_au"]) if mask_racc_xy else 0.0
 BZ0_MICROGAUSS = float(metadata["magnetic_field"]["initial_bz_microgauss"])
 FM_VALUE = float(metadata["initial_conditions"]["fM"])
-BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
+INITIAL_PLASMA_BETA = metadata["magnetic_field"].get("initial_plasma_beta")
+if INITIAL_PLASMA_BETA is not None:
+    INITIAL_PLASMA_BETA = float(INITIAL_PLASMA_BETA)
+    BZ0_LABEL = (
+        rf"$\beta_0={INITIAL_PLASMA_BETA:g}$, "
+        rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
+    )
+else:
+    # bz_microgaussを直接与えていた旧形式のmetadataとの互換性。
+    BZ0_LABEL = rf"$B_{{z0}}={BZ0_MICROGAUSS:g}\,\mu{{\rm G}}$, $f_M={FM_VALUE:g}$"
 
 print("\n=== Code units ===")
 print(f"Lunit   = {Lunit:.6e} cm")
