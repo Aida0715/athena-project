@@ -112,10 +112,14 @@ const Real Rs_phys   = 5.71e20;   // cm
 
 //===== Toyouchi+23 parameters =====
 Real epsilon_soft = 0.0;   // 2 * finest uniform SMR cell width
-Real finest_dx = 0.0, racc = 0.0;
+Real finest_dx = 0.0, racc = 0.0;  // racc is the legacy alias for racc0
+Real sphere_radii[3] = {};
+std::string sphere_file_prefix;
+bool sphere_csv_started[3] = {};
 const int sphere_samples = 4096;
 // Positive inward and outward rates, integrated on the actual spherical surface.
-void SphereFlux(MeshBlock *pmb, Real &inflow, Real &outflow) {
+void SphereFlux(MeshBlock *pmb, int sphere, Real &inflow, Real &outflow) {
+  const Real racc = sphere_radii[sphere];
   inflow = outflow = 0.0;
   const RegionSize &domain = pmb->pmy_mesh->mesh_size;
   const Real center[3] = {0.5*(domain.x1min+domain.x1max),
@@ -146,7 +150,8 @@ void SphereFlux(MeshBlock *pmb, Real &inflow, Real &outflow) {
     const Real local_dx=std::min(c->dx1f(i),std::min(c->dx2f(j),c->dx3f(k)));
     if (std::abs(local_dx-finest_dx)>1.0e-8*finest_dx) {
       std::stringstream msg;
-      msg << "Virtual sphere must be covered by the finest SMR level.";
+      msg << "Virtual sphere racc" << sphere
+          << " must be covered by the finest SMR level.";
       ATHENA_ERROR(msg);
     }
     // Interpolate radial mass-flux density, not Cartesian velocity: a purely
@@ -194,6 +199,8 @@ extern const Real velocity_coeff[8];
 extern Real bz_microgauss;
 extern Real bz_code;
 extern Real Bunit;
+Real field_angle_deg = 0.0;
+Real field_x_fraction = 0.0, field_z_fraction = 1.0;
 Real initial_plasma_beta = 0.0;
 Real initial_mean_pressure = 0.0;
 std::once_flag initial_field_once;
@@ -278,6 +285,15 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "  },\n"
       << "  \"virtual_sphere\": {\n"
       << "    \"radius_au\": " << racc*Lunit/AU << ",\n"
+      << "    \"racc0_au\": " << sphere_radii[0]*Lunit/AU << ",\n"
+      << "    \"racc1_au\": " << sphere_radii[1]*Lunit/AU << ",\n"
+      << "    \"racc2_au\": " << sphere_radii[2]*Lunit/AU << ",\n"
+      << "    \"racc2_definition\": \"(racc0+racc1)/2\",\n"
+      << "    \"csv_files\": [\"" << JsonEscape(problem_id) << ".racc0.csv\", \""
+      << JsonEscape(problem_id) << ".racc1.csv\", \"" << JsonEscape(problem_id) << ".racc2.csv\"],\n"
+      << "    \"csv_cadence\": \"every completed timestep; physical units in column names\",\n"
+      << "    \"hst_suffixes\": [\"racc0\",\"racc1\",\"racc2\"],\n"
+      << "    \"legacy_hst_columns\": \"Mdot_in, Mdot_out, Mdot_net, Mstar_diag refer to racc0\",\n"
       << "    \"dxmin_au\": " << finest_dx*Lunit/AU << ",\n"
       << "    \"surface_samples\": " << sphere_samples << ",\n"
       << "    \"gas_removed\": false,\n"
@@ -312,14 +328,21 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
       << "  },\n"
       << "  \"magnetic_field\": {\n"
       << "    \"enabled_at_compile_time\": " << JsonBool(MAGNETIC_FIELDS_ENABLED) << ",\n"
+      << "    \"initial_field_angle_deg\": " << field_angle_deg << ",\n"
+      << "    \"field_direction\": \"(sin(theta),0,cos(theta)); theta from +z toward +x\",\n"
+      << "    \"initial_field_strength_microgauss\": " << bz_microgauss << ",\n"
+      << "    \"initial_field_strength_code\": " << bz_code << ",\n"
+      << "    \"initial_bx_microgauss\": " << bz_microgauss*field_x_fraction << ",\n"
+      << "    \"initial_bx_code\": " << bz_code*field_x_fraction << ",\n"
+      << "    \"initial_by_microgauss\": 0,\n"
       << "    \"initial_plasma_beta\": " << initial_plasma_beta << ",\n"
       << "    \"beta_definition\": \"volume-mean initial gas pressure / uniform magnetic pressure; active SMR leaves, fM, noise and EOS density floor included\",\n"
       << "    \"initial_mean_pressure_code\": " << initial_mean_pressure << ",\n"
       << "    \"initial_mean_pressure_cgs\": " << initial_mean_pressure*pressure_unit << ",\n"
       << "    \"vtk_magnetic_diagnostics\": \"plasma_beta dimensionless (infinity at zero B); magnetic_pressure in code pressure; alfven_speed in code velocity\",\n"
-      << "    \"initial_bz_microgauss\": " << bz_microgauss << ",\n"
-      << "    \"initial_bz_code\": " << bz_code << ",\n"
-      << "    \"initial_bz_gauss\": " << bz_microgauss*1.0e-6 << ",\n"
+      << "    \"initial_bz_microgauss\": " << bz_microgauss*field_z_fraction << ",\n"
+      << "    \"initial_bz_code\": " << bz_code*field_z_fraction << ",\n"
+      << "    \"initial_bz_gauss\": " << bz_microgauss*field_z_fraction*1.0e-6 << ",\n"
       << "    \"normalization\": \"B_gauss = B_code * Bunit; Pmag_code = B_code^2/2\",\n"
       << "    \"sts_enabled_at_compile_time\": " << JsonBool(STS_ENABLED) << ",\n"
       << "    \"eta_ohm_code\": " << eta_ohm << ",\n"
@@ -363,7 +386,7 @@ void WriteToyouchiMetadata(Mesh *pm, ParameterInput *pin,
 
 // ===== magnetic field =====
 Real bz_microgauss = 0.0;  // derived uniform field [microgauss]
-Real bz_code = 0.0;        // Athena++へ実際に渡す無次元磁場(z方向)
+Real bz_code = 0.0;        // Legacy internal name: total field magnitude B0, not z component.
 Real Bunit = 0.0;          // magnetic-field unit [Gauss]
 
 // ===== MMH profile fit =====
@@ -503,7 +526,7 @@ void NormalizeInitialField(Mesh *pm, ParameterInput *pin, const RegionSize &shap
   if (Globals::my_rank == 0)
     std::cout << "Initial volume-mean plasma beta=" << initial_plasma_beta
               << "; mean gas pressure=" << initial_mean_pressure
-              << "; uniform Bz=" << bz_microgauss << " microgauss" << std::endl;
+              << "; uniform |B|=" << bz_microgauss << " microgauss; angle=" << field_angle_deg << " deg" << std::endl;
 }
 
 Real VrMMHCode(Real r_code) {
@@ -601,11 +624,19 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   const Real dx3=(mesh_size.x3max-mesh_size.x3min)/mesh_size.nx3;
   finest_dx=std::ldexp(std::min(dx1,std::min(dx2,dx3)),-finest_level);
   epsilon_soft=racc=2.0*finest_dx;
-  if (racc >= 0.5*std::min(mesh_size.x1max-mesh_size.x1min,
-                 std::min(mesh_size.x2max-mesh_size.x2min,mesh_size.x3max-mesh_size.x3min))) {
-    std::stringstream msg;
-    msg << "Virtual sphere must fit strictly inside the domain.";
-    ATHENA_ERROR(msg);
+  sphere_radii[0] = racc;
+  sphere_radii[1] = pin->GetOrAddReal("problem", "racc1_au", 1000.0)*AU/Lunit;
+  sphere_radii[2] = 0.5*(sphere_radii[0]+sphere_radii[1]);
+  sphere_file_prefix = pin->GetString("job", "problem_id");
+  for (int q=0; q<3; ++q) {
+    if (!std::isfinite(sphere_radii[q]) || sphere_radii[q] <= 0.0
+        || sphere_radii[q] >= 0.5*std::min(mesh_size.x1max-mesh_size.x1min,
+            std::min(mesh_size.x2max-mesh_size.x2min,mesh_size.x3max-mesh_size.x3min))) {
+      std::stringstream msg;
+      msg << "Virtual sphere racc" << q
+          << " must have a finite positive radius strictly inside the domain.";
+      ATHENA_ERROR(msg);
+    }
   }
   // Ignore legacy epsilon/racc inputs; record the derived values in restart headers.
   pin->SetReal("problem", "epsilon_au", epsilon_soft*Lunit/AU);
@@ -613,7 +644,31 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   pin->SetReal("hydro", "iso_sound_speed", sound_speed_kms*1.0e5/Vunit);
   // Restart-persistent signed transported mass, previous net rate, validity flag.
   AllocateRealUserMeshDataField(1);
-  ruser_mesh_data[0].NewAthenaArray(3);
+  // Reject older restart layouts before the mesh reader consumes the payload.
+  if (!pin->DoesParameterExist("problem", "sphere_state_version")
+      && (ncycle > 0 || pin->DoesParameterExist("problem", "initial_mean_pressure_code"))) {
+    std::stringstream msg;
+    msg << "Old single-sphere restart is incompatible; start a new three-sphere run.";
+    ATHENA_ERROR(msg);
+  }
+  if (pin->GetOrAddInteger("problem", "sphere_state_version", 2) != 2) {
+    std::stringstream msg;
+    msg << "Unsupported virtual-sphere restart layout.";
+    ATHENA_ERROR(msg);
+  }
+  for (int q=0; q<3; ++q) {
+    const std::string key = "saved_racc"+std::to_string(q)+"_code";
+    if (pin->DoesParameterExist("problem", key)
+        && pin->GetReal("problem", key) != sphere_radii[q]) {
+      std::stringstream msg;
+      msg << "Cannot change virtual-sphere radius on restart: " << key;
+      ATHENA_ERROR(msg);
+    }
+    std::ostringstream value;
+    value << std::setprecision(std::numeric_limits<Real>::max_digits10) << sphere_radii[q];
+    pin->SetString("problem", key, value.str());
+  }
+  ruser_mesh_data[0].NewAthenaArray(9);
   ruser_mesh_data[0].ZeroClear();
 
   if (Globals::my_rank == 0) {
@@ -688,12 +743,17 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     ATHENA_ERROR(msg);
   }
   InitProfiles();
-  AllocateUserHistoryOutput(5);
+  AllocateUserHistoryOutput(20);
   EnrollUserHistoryOutput(0, StarMassHistory, "Mstar_fixed");
   EnrollUserHistoryOutput(1, SphereHistory, "Mdot_in");
   EnrollUserHistoryOutput(2, SphereHistory, "Mdot_out");
   EnrollUserHistoryOutput(3, SphereHistory, "Mdot_net");
   EnrollUserHistoryOutput(4, SphereHistory, "Mstar_diag");
+  const char *quantities[5] = {"Mdot_in", "Mdot_out", "Mdot_net", "DeltaM", "Mstar_diag"};
+  for (int q=0; q<3; ++q)
+    for (int v=0; v<5; ++v)
+      EnrollUserHistoryOutput(5+5*q+v, SphereHistory,
+                             (std::string(quantities[v])+"_racc"+std::to_string(q)).c_str());
   if (Globals::my_rank == 0) {
     std::cout << "Fixed stellar mass=" << mstar_fixed
               << " code mass; Wise19 core radius=" << fit_rmin_au
@@ -737,6 +797,24 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     msg << "Replace problem/bz_microgauss with problem/plasma_beta.";
     ATHENA_ERROR(msg);
   }
+  field_angle_deg = pin->GetOrAddReal("problem", "magnetic_angle_deg", 0.0);
+  if (!std::isfinite(field_angle_deg) || field_angle_deg < 0.0 || field_angle_deg > 180.0) {
+    std::stringstream msg;
+    msg << "magnetic_angle_deg must be finite and in [0,180].";
+    ATHENA_ERROR(msg);
+  }
+  if (pin->DoesParameterExist("problem", "saved_magnetic_angle_deg")
+      && pin->GetReal("problem", "saved_magnetic_angle_deg") != field_angle_deg) {
+    std::stringstream msg;
+    msg << "Cannot change initial magnetic angle on restart.";
+    ATHENA_ERROR(msg);
+  }
+  std::ostringstream saved_angle;
+  saved_angle << std::setprecision(std::numeric_limits<Real>::max_digits10) << field_angle_deg;
+  pin->SetString("problem", "saved_magnetic_angle_deg", saved_angle.str());
+  const Real angle = field_angle_deg*M_PI/180.0;
+  field_x_fraction = (field_angle_deg == 0.0 || field_angle_deg == 180.0) ? 0.0 : std::sin(angle);
+  field_z_fraction = field_angle_deg == 90.0 ? 0.0 : std::cos(angle);
   Bunit = punit->code_magneticfield_cgs;
   // Restart files retain the original normalization. Never normalize evolved B.
   if (pin->DoesParameterExist("problem", "initial_mean_pressure_code")) {
@@ -877,13 +955,13 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   }
 
   if (MAGNETIC_FIELDS_ENABLED) {
-    // Initialize face-centered magnetic field: B = (0, 0, bz_code)
+    // Uniform, divergence-free B = B0*(sin(theta), 0, cos(theta)).
 
     // Bx on x1 faces
     for (int k=ks; k<=ke; ++k) {
       for (int j=js; j<=je; ++j) {
         for (int i=is; i<=ie+1; ++i) {
-          pfield->b.x1f(k,j,i) = 0.0;
+          pfield->b.x1f(k,j,i) = bz_code*field_x_fraction;
         }
       }
     }
@@ -901,7 +979,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     for (int k=ks; k<=ke+1; ++k) {
       for (int j=js; j<=je; ++j) {
         for (int i=is; i<=ie; ++i) {
-          pfield->b.x3f(k,j,i) = bz_code;
+          pfield->b.x3f(k,j,i) = bz_code*field_z_fraction;
         }
       }
     }
@@ -1100,35 +1178,66 @@ Real StarMassHistory(MeshBlock *pmb, int iout) {
 
 // HST uses code units and sums callbacks over all blocks/ranks.
 Real SphereHistory(MeshBlock *pmb, int iout) {
-  if (iout == 4)
-    return pmb->gid == 0 ? mstar_fixed+pmb->pmy_mesh->ruser_mesh_data[0](0) : 0.0;
+  const int sphere = iout < 5 ? 0 : (iout-5)/5;
+  const int quantity = iout < 5 ? (iout == 4 ? 4 : iout-1) : (iout-5)%5;
+  if (quantity >= 3) {
+    const Real delta = pmb->pmy_mesh->ruser_mesh_data[0](3*sphere);
+    return pmb->gid == 0 ? delta+(quantity == 4 ? mstar_fixed : 0.0) : 0.0;
+  }
   Real in, out;
-  SphereFlux(pmb, in, out);
-  return iout == 1 ? in : (iout == 2 ? out : in-out);
+  SphereFlux(pmb, sphere, in, out);
+  return quantity == 0 ? in : (quantity == 1 ? out : in-out);
 }
 
 void Mesh::UserWorkInLoop() {
   ApplyVelocityCeiling(this);
-  Real rates[2] = {0.0,0.0};
+  Real rates[6] = {};
   for (int b=0; b<nblocal; ++b) {
-    Real in, out;
-    SphereFlux(my_blocks(b), in, out);
-    rates[0]+=in; rates[1]+=out;
+    for (int q=0; q<3; ++q) {
+      Real in, out;
+      SphereFlux(my_blocks(b), q, in, out);
+      rates[2*q]+=in; rates[2*q+1]+=out;
+    }
   }
 #ifdef MPI_PARALLEL
-  MPI_Allreduce(MPI_IN_PLACE, rates, 2, MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, rates, 6, MPI_ATHENA_REAL, MPI_SUM, MPI_COMM_WORLD);
 #endif
-  const Real net=rates[0]-rates[1];
   AthenaArray<Real> &state=ruser_mesh_data[0];
-  state(0)+=dt*(state(2)>0.5 ? 0.5*(state(1)+net) : net);
-  state(1)=net;
-  state(2)=1.0;
+  const Real rate_unit=Munit/Msun/(Tunit/31557600.0);
+  for (int q=0; q<3; ++q) {
+    const Real net = rates[2*q]-rates[2*q+1];
+    const int o=3*q;
+    state(o)+=dt*(state(o+2)>0.5 ? 0.5*(state(o+1)+net) : net);
+    state(o+1)=net;
+    state(o+2)=1.0;
+    if (Globals::my_rank == 0) {
+      const std::string file = sphere_file_prefix+".racc"+std::to_string(q)+".csv";
+      // New runs truncate; resumed runs append (or create a new file in a new directory).
+      const bool fresh = !sphere_csv_started[q] && ncycle == 0;
+      std::ifstream existing(file.c_str(), std::ios::binary | std::ios::ate);
+      const bool header = fresh || !existing || existing.tellg() == std::streampos(0);
+      existing.close();
+      std::ofstream out(file.c_str(), fresh ? std::ios::trunc : std::ios::app);
+      if (header)
+        out << "time_yr,radius_au,Mdot_in_msun_per_yr,Mdot_out_msun_per_yr,Mdot_net_msun_per_yr,DeltaM_msun,Mstar_diag_msun\n";
+      out << std::setprecision(std::numeric_limits<Real>::max_digits10)
+          << (time+dt)*Tunit/31557600.0 << ',' << sphere_radii[q]*Lunit/AU << ','
+          << rates[2*q]*rate_unit << ',' << rates[2*q+1]*rate_unit << ',' << net*rate_unit
+          << ',' << state(o)*Munit/Msun << ',' << (mstar_fixed+state(o))*Munit/Msun << '\n';
+      out.close();
+      if (!out) {
+        std::stringstream msg;
+        msg << "Cannot write virtual-sphere diagnostics: " << file;
+        ATHENA_ERROR(msg);
+      }
+      sphere_csv_started[q] = true;
+    }
+  }
   if (Globals::my_rank==0 && (ncycle_out>0 && (ncycle+1)%ncycle_out==0)) {
-    const Real rate_unit=Munit/Msun/(Tunit/31557600.0);
     std::cout << "VirtualSphere: time=" << (time+dt)*Tunit/31557600.0
               << " yr Mdot_in=" << rates[0]*rate_unit
               << " Mdot_out=" << rates[1]*rate_unit
-              << " Mdot_net=" << net*rate_unit << " Msun/yr"
+              << " Mdot_net=" << (rates[0]-rates[1])*rate_unit << " Msun/yr"
               << " Mstar_diag=" << (mstar_fixed+state(0))*Munit/Msun
               << " Msun (gravity fixed)" << std::endl;
   }
